@@ -22,9 +22,17 @@ HOLD keeps the LAST gripper command (don't drop what you're holding). Replaying 
 Visually: the arm pauses mid-motion while "thinking" (buffer empty), then resumes when the
 chunk lands. This shows how planner speed affects control.
 
-Reuses the lerobot select_action / processor path verbatim; only the loop is ours.
+Reuses the validated lerobot select_action / processor path verbatim; only the loop is ours.
+
+RT_STITCH=blend turns this into an RTC-style "plan ahead while executing" loop (research):
+the planner starts the next chunk while the current one is still running (RT_REPLAN_AT),
+then we freeze the steps reality already executed during inference and ramp-blend the
+overlap (RT_BLEND_STEPS) onto the new chunk so motion stays continuous instead of pausing
+to think. RT_STITCH=hold (default) keeps the original stop-and-decide HOLD demo unchanged.
+
 Env: SUITE, TASK_ID, SEED, THINK (1), CKPT, PORT (8081), VIEW_RES (720), VIDEO_RES (600),
-RT_HZ (20), RT_LOOKAHEAD (0), OUT_DIR (/outputs). Open http://localhost:PORT.
+RT_HZ (20), RT_LOOKAHEAD (0), RT_STITCH (hold), RT_REPLAN_AT (-1=auto), RT_BLEND_STEPS (4),
+RT_GRIPPER_HYST (0.4), OUT_DIR (/outputs). Open http://localhost:PORT.
 """
 import io
 import json
@@ -32,7 +40,6 @@ import os
 import random
 import threading
 import time
-from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -41,16 +48,21 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 SUITE = os.environ.get("SUITE", "libero_object")
-TASK_ID = int(os.environ.get("TASK_ID") or "3")
-SEED = int(os.environ.get("SEED") or "1000")
+TASK_ID = int(os.environ.get("TASK_ID", "3"))
+SEED = int(os.environ.get("SEED", "1000"))
 THINK = os.environ.get("THINK", "1") == "1"
 CKPT = os.environ.get("CKPT", "allenai/MolmoAct2-Think-LIBERO")
-PORT = int(os.environ.get("PORT") or "8081")
-VIEW_RES = int(os.environ.get("VIEW_RES") or "720")    # live viewport (RT favors smoothness)
-VIDEO_RES = int(os.environ.get("VIDEO_RES") or "600")  # saved debug video (kept small)
-RT_HZ = float(os.environ.get("RT_HZ") or "20")         # wall-clock control rate
-RT_LOOKAHEAD = int(os.environ.get("RT_LOOKAHEAD") or "0")  # replan when buffer <= this (pipelining knob)
-RT_MAX_STEPS = int(os.environ.get("RT_MAX_STEPS") or "1200")  # RT runs in wall time; holds burn budget, so allow completion
+PORT = int(os.environ.get("PORT", "8081"))
+VIEW_RES = int(os.environ.get("VIEW_RES", "720"))    # live viewport (RT favors smoothness)
+VIDEO_RES = int(os.environ.get("VIDEO_RES", "600"))  # saved debug video (kept small)
+RT_HZ = float(os.environ.get("RT_HZ", "20"))         # wall-clock control rate
+RT_LOOKAHEAD = int(os.environ.get("RT_LOOKAHEAD", "0"))  # legacy: replan when buffer <= this (hold mode)
+RT_MAX_STEPS = int(os.environ.get("RT_MAX_STEPS", "1200"))  # RT runs in wall time; holds burn budget, so allow completion
+# --- RTC-style "plan ahead while executing" knobs (research; default keeps hold demo) ---
+RT_STITCH = os.environ.get("RT_STITCH", "hold").strip().lower()   # hold | blend
+RT_REPLAN_AT = int(os.environ.get("RT_REPLAN_AT", "-1"))  # blend: replan when remaining <= this (-1 => auto chunk//2)
+RT_BLEND_STEPS = int(os.environ.get("RT_BLEND_STEPS", "4"))  # blend: ramp window W over delta dims
+RT_GRIPPER_HYST = float(os.environ.get("RT_GRIPPER_HYST", "0.4"))  # blend: min change to flip the absolute gripper
 OUT_DIR = os.environ.get("OUT_DIR", "/outputs")
 SUITES = ["libero_object", "libero_goal", "libero_spatial", "libero_10"]
 DT = 1.0 / RT_HZ
@@ -64,6 +76,7 @@ STATE = {
     "objects": [],
     "step": 0, "infer_ms": 0.0, "success": False,
     "holding": False, "buffer": 0, "hold_pct": 0.0,
+    "stitch": RT_STITCH, "mean_accel": 0.0, "max_jerk": 0.0,
     "status": "starting", "frame": None, "video_url": "",
 }
 LOCK = threading.Lock()
@@ -91,8 +104,9 @@ def _set_frame(rgb):
         STATE["frame"] = _encode_jpeg(rgb)
 
 
-def _banner_frame(rgb, text, size, thinking):
-    """Downscale to `size`; top banner shows the command + a THINKING tag when holding."""
+def _banner_frame(rgb, text, size, tag=""):
+    """Downscale to `size`; top banner shows the command + an optional status tag
+    (THINKING while holding, BLENDING while stitching a fresh chunk in)."""
     img = Image.fromarray(np.ascontiguousarray(rgb)).resize((size, size), Image.BILINEAR)
     bh = max(40, size // 12)
     bh += bh % 2
@@ -100,12 +114,96 @@ def _banner_frame(rgb, text, size, thinking):
     canvas.paste(img, (0, bh))
     d = ImageDraw.Draw(canvas)
     f = _font(max(14, size // 30))
-    cap = 44 if thinking else 60  # leave room on the right for the THINKING tag
+    cap = 44 if tag else 60  # leave room on the right for the status tag
     msg = text if len(text) <= cap else text[:cap - 3] + "..."
     d.text((10, bh // 2), msg, fill=(240, 240, 240), font=f, anchor="lm")
-    if thinking:
-        d.text((size - 10, bh // 2), "THINKING", fill=(255, 180, 80), font=f, anchor="rm")
+    if tag:
+        color = (255, 180, 80) if tag == "THINKING" else (120, 210, 140)
+        d.text((size - 10, bh // 2), tag, fill=color, font=f, anchor="rm")
     return np.asarray(canvas)
+
+
+# ---- RTC-style chunk stitching (action level) --------------------------------
+# Actions are env-space 7-D [dx,dy,dz, droll,dpitch,dyaw, gripper]: the 6 motion
+# dims are OSC deltas (relative), the gripper is absolute. We index every plan by an
+# absolute "motion step" counter (number of real, non-hold actions executed so far),
+# so two overlapping chunks can be aligned: a chunk planned from the obs at motion
+# step `base` has actions[j] intended for motion step base+j.
+class ActivePlan:
+    """A list of env-space actions plus a consume cursor, indexed by motion step.
+
+    Invariant maintained by the SIM loop: base + cursor == current motion-step
+    counter, i.e. actions[cursor] is the action for the step about to execute.
+    """
+
+    def __init__(self, actions, base):
+        self.actions = [np.ascontiguousarray(a, dtype=np.float32) for a in actions]
+        self.base = int(base)
+        self.cursor = 0
+
+    def remaining(self):
+        return len(self.actions) - self.cursor
+
+    def next_action(self):
+        if self.cursor < len(self.actions):
+            a = self.actions[self.cursor]
+            self.cursor += 1
+            return a
+        return None
+
+
+def _blend_gripper(old_g, new_g, hyst):
+    """Absolute gripper with hysteresis: only flip when the command moves enough."""
+    if abs(float(new_g) - float(old_g)) < hyst:
+        return float(old_g)
+    return float(new_g)
+
+
+def splice(old, new_actions, drop, blend_steps, gripper_hyst):
+    """Freeze-and-inpaint at the action level (RTC-style, no model changes).
+
+    `new_actions[drop + k]` aligns with the old plan's `actions[old.cursor + k]`
+    (both are motion step `old.base + old.cursor + k`). We discard the `drop` steps
+    of the new chunk that reality already executed since it was planned, then ramp
+    from the old plan to the new one over `blend_steps` on the delta dims so there is
+    no velocity jump at the splice. The gripper (absolute) switches with hysteresis.
+    """
+    new_actions = [np.ascontiguousarray(a, dtype=np.float32) for a in new_actions]
+    nnew = len(new_actions)
+    drop = int(max(0, min(drop, nnew - 1)))  # always keep at least the last action
+    base = old.base + old.cursor
+    last_g = float(old.actions[old.cursor][0, 6]) if old.remaining() > 0 else None
+    merged = []
+    for k in range(nnew - drop):
+        new_a = new_actions[drop + k].copy()
+        oi = old.cursor + k
+        old_a = old.actions[oi] if oi < len(old.actions) else None
+        if blend_steps > 0 and k < blend_steps and old_a is not None:
+            alpha = (k + 1) / (blend_steps + 1)  # ramps old->new, never a hard jump
+            new_a[:, :6] = (1.0 - alpha) * old_a[:, :6] + alpha * new_a[:, :6]
+        if last_g is not None:
+            g = _blend_gripper(last_g, float(new_a[0, 6]), gripper_hyst)
+            new_a[:, 6] = g
+            last_g = g
+        merged.append(new_a)
+    return ActivePlan(merged, base)
+
+
+def smoothness_metrics(applied):
+    """Finite-difference accel/jerk of the executed per-step deltas (motion dims).
+
+    `applied` is a list of executed 7-D actions. delta ~ per-step displacement
+    (velocity proxy), so accel = diff(delta), jerk = diff(accel). Returns the mean
+    |accel| and max |jerk| magnitude over the run (chunk-boundary spikes dominate).
+    """
+    if len(applied) < 3:
+        return 0.0, 0.0
+    arr = np.asarray(applied, dtype=np.float64)[:, :6]
+    accel = np.diff(arr, axis=0)
+    jerk = np.diff(accel, axis=0)
+    mean_accel = float(np.mean(np.linalg.norm(accel, axis=1)))
+    max_jerk = float(np.max(np.linalg.norm(jerk, axis=1)))
+    return mean_accel, max_jerk
 
 
 class Scene:
@@ -216,30 +314,45 @@ def engine_thread():
         return out, infer_s
 
     def run_command(sc, instruction):
+        blend = RT_STITCH == "blend"
         with LOCK:
             STATE.update(mode="running", instruction=instruction, step=0, success=False,
                          status=f"running: {instruction}", video_url="", holding=False,
-                         buffer=0, hold_pct=0.0)
+                         buffer=0, hold_pct=0.0, stitch=RT_STITCH, mean_accel=0.0, max_jerk=0.0)
         STOP["flag"] = False
         policy.reset()
         obs, _ = sc.env.reset(seed=SEED)
         generator = ev._make_rollout_action_generator(policy, [SEED])
         max_steps = sc.env.call("_max_episode_steps")[0]
 
-        buffer = deque()
         buf_lock = threading.Lock()
+        # `motion_steps` counts only real (non-hold) actions executed: it is the
+        # absolute index used to align overlapping chunks. `plan` is the ActivePlan.
         shared = {"obs": obs, "done": False, "last_gripper": 0.0,
-                  "hold_steps": 0, "total_steps": 0}
+                  "hold_steps": 0, "total_steps": 0, "motion_steps": 0,
+                  "plan": None, "chunk_len": 0, "blend_until": -1}
+
+        def replan_threshold():
+            # blend: start the next plan while the current one is still executing.
+            if not blend:
+                return RT_LOOKAHEAD  # hold mode: refill only when (nearly) empty
+            if RT_REPLAN_AT >= 0:
+                return RT_REPLAN_AT
+            return max(1, shared["chunk_len"] // 2) if shared["chunk_len"] else 6
 
         def planner():
             while not STOP["flag"] and not shared["done"]:
                 with buf_lock:
-                    have = len(buffer)
-                if have > RT_LOOKAHEAD:
+                    plan = shared["plan"]
+                    rem = plan.remaining() if plan is not None else 0
+                if rem > replan_threshold():
                     time.sleep(0.005)
                     continue
+                # Snapshot the obs and the motion step it corresponds to BEFORE the
+                # (slow) forward, so we know how far reality moves during inference.
                 with LOCK:
                     cur = shared["obs"]
+                plan_base_motion = shared["motion_steps"]
                 try:
                     proc = preprocess_observation(cur)
                     proc["task"] = [instruction for _ in range(sc.env.num_envs)]
@@ -251,7 +364,19 @@ def engine_thread():
                     time.sleep(0.02)
                     continue
                 with buf_lock:
-                    buffer.extend(chunk)
+                    shared["chunk_len"] = len(chunk)
+                    cur_motion = shared["motion_steps"]
+                    old = shared["plan"]
+                    if blend and old is not None and old.remaining() > 0:
+                        drop = cur_motion - plan_base_motion  # steps reality already did
+                        shared["plan"] = splice(old, chunk, drop, RT_BLEND_STEPS, RT_GRIPPER_HYST)
+                        shared["blend_until"] = shared["total_steps"] + RT_BLEND_STEPS
+                    else:
+                        # first plan, or hold mode, or planner fell fully behind: install
+                        # the fresh chunk from the current motion step (no overlap to blend).
+                        drop = cur_motion - plan_base_motion if blend else 0
+                        d = int(max(0, min(drop, len(chunk) - 1)))
+                        shared["plan"] = ActivePlan(chunk[d:], cur_motion)
                 with LOCK:
                     if infer_s > 0:
                         STATE["infer_ms"] = round(infer_s * 1000.0, 0)
@@ -260,13 +385,17 @@ def engine_thread():
         pth.start()
 
         frames = []
+        applied = []  # executed 7-D actions, for smoothness metrics + offline plots
         success = False
         next_t = time.perf_counter()
         step = 0
         while not STOP["flag"] and not shared["done"] and step < max_steps:
             with buf_lock:
-                action = buffer.popleft() if buffer else None
-                depth_buf = len(buffer)
+                plan = shared["plan"]
+                action = plan.next_action() if plan is not None else None
+                if action is not None:
+                    shared["motion_steps"] += 1
+                depth_buf = plan.remaining() if plan is not None else 0
             holding = action is None
             if holding:
                 action = np.zeros((sc.env.num_envs, 7), dtype=np.float32)
@@ -275,6 +404,7 @@ def engine_thread():
             else:
                 shared["last_gripper"] = float(action[0, 6])
             shared["total_steps"] += 1
+            applied.append(np.asarray(action[0], dtype=np.float32).copy())
 
             obs, reward, terminated, truncated, info = sc.env.step(action)
             with LOCK:
@@ -286,14 +416,19 @@ def engine_thread():
                     pass
             done = bool(np.any(terminated) or np.any(truncated))
 
+            blending = (not holding) and shared["total_steps"] <= shared["blend_until"]
+            tag = "THINKING" if holding else ("BLENDING" if blending else "")
             rgb = sc.hi_res(VIEW_RES)
             _set_frame(rgb)
-            frames.append(_banner_frame(rgb, instruction, VIDEO_RES, holding))
+            frames.append(_banner_frame(rgb, instruction, VIDEO_RES, tag))
             step += 1
             hp = 100.0 * shared["hold_steps"] / max(1, shared["total_steps"])
+            ma, mj = smoothness_metrics(applied[-60:])  # rolling live readout
             with LOCK:
                 STATE.update(step=step, holding=holding, buffer=depth_buf, hold_pct=round(hp, 0),
-                             status=("thinking (holding pose)" if holding else f"running: {instruction}"))
+                             mean_accel=round(ma, 4), max_jerk=round(mj, 4),
+                             status=("thinking (holding pose)" if holding
+                                     else ("blending chunk" if blending else f"running: {instruction}")))
             if done:
                 shared["done"] = True
 
@@ -308,10 +443,11 @@ def engine_thread():
         STOP["flag"] = True
         pth.join(timeout=5.0)
 
+        ma, mj = smoothness_metrics(applied)  # final whole-run metrics
         url = ""
         if frames:
             ts = datetime.now().strftime("%H%M%S")
-            name = f"interactive_rt/{ts}_{sc.suite}_{sc.task_id}_{'ok' if success else 'run'}.mp4"
+            name = f"interactive_rt/{ts}_{sc.suite}_{sc.task_id}_{RT_STITCH}_{'ok' if success else 'run'}.mp4"
             path = os.path.join(OUT_DIR, name)
             try:
                 import imageio
@@ -324,9 +460,17 @@ def engine_thread():
                     STATE["_video_path"] = path
             except Exception as e:  # noqa: BLE001
                 print("video save failed:", e, flush=True)
+            try:
+                np.save(os.path.splitext(path)[0] + "_actions.npy", np.asarray(applied, dtype=np.float32))
+            except Exception as e:  # noqa: BLE001
+                print("action dump failed:", e, flush=True)
 
+        hp = 100.0 * shared["hold_steps"] / max(1, shared["total_steps"])
+        print(f"[run] stitch={RT_STITCH} steps={shared['total_steps']} hold%={hp:.0f} "
+              f"mean_accel={ma:.4f} max_jerk={mj:.4f} success={success}", flush=True)
         with LOCK:
             STATE.update(mode="idle", success=success, video_url=url, holding=False,
+                         mean_accel=round(ma, 4), max_jerk=round(mj, 4),
                          status=("success" if success else ("stopped" if STOP["flag"] else "done")))
         _set_frame(sc.idle_frame(VIEW_RES))
 
@@ -399,7 +543,7 @@ PAGE = b"""<!doctype html><html><head><meta charset=utf-8>
  a{color:#7aa2ff} video{width:640px;border-radius:10px;margin-top:10px;background:#000}
 </style></head><body><div class=wrap>
 <h1>MolmoAct2 x LIBERO - REAL-TIME sim</h1>
-<p class=sub>The simulator runs at wall-clock speed; the robot HOLDS its pose while the model thinks, then moves when the next chunk lands.</p>
+<p class=sub>The simulator runs at wall-clock speed. In <b>hold</b> mode the robot pauses while the model thinks; in <b>blend</b> mode the planner runs ahead and new chunks are stitched in so motion stays continuous.</p>
 <img src="/stream" alt="sim">
 <div class=row>
  <input id=cmd placeholder="type an instruction, then Send (resets the scene and runs it in real time)">
@@ -420,7 +564,7 @@ document.getElementById('cmd').addEventListener('keydown',e=>{if(e.key==='Enter'
 let lastVid='';
 async function poll(){
  try{const s=await(await fetch('/status')).json();
-  let t='['+s.mode+'] '+s.status+' | step '+s.step+' | last infer '+s.infer_ms+' ms | buffer '+s.buffer+' | hold '+s.hold_pct+'%';
+  let t='['+s.mode+'] '+s.status+' | '+s.stitch+' | step '+s.step+' | last infer '+s.infer_ms+' ms | buffer '+s.buffer+' | hold '+s.hold_pct+'% | accel '+s.mean_accel+' | jerk '+s.max_jerk;
   const m=document.getElementById('meta'); m.textContent=t; m.className='meta'+(s.holding?' think':'');
   document.getElementById('scene').textContent='Scene: '+s.suite+' / task '+s.task_id+' - "'+s.scene_task+'"';
   document.getElementById('objs').innerHTML='Objects in scene: '+(s.objects||[]).map(o=>'<span class=chip>'+o+'</span>').join('');
@@ -454,7 +598,8 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 s = {k: STATE[k] for k in ("mode", "status", "instruction", "scene_task",
                                            "suite", "task_id", "objects", "step", "infer_ms",
-                                           "success", "holding", "buffer", "hold_pct", "video_url")}
+                                           "success", "holding", "buffer", "hold_pct", "video_url",
+                                           "stitch", "mean_accel", "max_jerk")}
             self._send(200, "application/json", json.dumps(s).encode())
         elif path == "/video":
             with LOCK:

@@ -1,0 +1,7 @@
+suite,task_id,mode,success,motion_steps,hold_steps,hold_pct,wall_s,throughput_sps,infer_ms,mean_accel,max_jerk
+libero_object,3,sync,1,115,108,48.4,13.5,8.52,435.0,0.09688,0.93625
+libero_object,3,hold,1,123,105,46.1,12.32,9.98,437.0,0.10148,0.94762
+libero_object,3,blend,1,105,79,42.9,10.18,10.31,450.0,0.17816,0.94631
+libero_object,2,sync,1,111,108,49.3,13.29,8.35,435.0,0.10346,1.05136
+libero_object,2,hold,1,120,97,44.7,11.86,10.12,467.0,0.10627,1.00368
+libero_object,2,blend,1,105,83,44.1,10.38,10.12,458.0,0.17719,0.99425

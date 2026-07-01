@@ -17,10 +17,11 @@
 # Only if you run this on a REMOTE/headless box, forward the port first:
 #   ssh -L 8081:localhost:8081 <host>
 #
-# FAST MODE by default: depth reasoning OFF (THINK=0) + num_steps=4 — much faster
-# closed-loop with no measured success drop on libero_object, so the real-time view
-# flows. Set THINK=1 for the full "Think" spatial-reasoning path (slower; better on
-# harder spatial tasks).
+# FAST MODE by default: depth reasoning OFF (THINK=0) + num_steps=4. The overnight
+# closed-loop sweep showed this keeps 100% success on libero_object while running
+# ~2.9x faster than the full depth-reasoning path (which also adds a ~20s first-plan
+# stall), so the real-time view actually flows. Set THINK=1 for the full "Think"
+# spatial-reasoning path (slower; better on harder spatial tasks).
 set -euo pipefail
 
 export SUITE="${SUITE:-libero_object}"
@@ -33,6 +34,13 @@ export PORT="${PORT:-8081}"
 export VIEW_RES="${VIEW_RES:-720}"
 export RT_HZ="${RT_HZ:-20}"
 export RT_LOOKAHEAD="${RT_LOOKAHEAD:-0}"
+# RTC-style "plan ahead while executing" (research). RT_STITCH=hold keeps the original
+# stop-and-decide demo; RT_STITCH=blend pipelines planning and stitches chunks for
+# continuous motion. RT_REPLAN_AT=-1 auto-picks ~chunk/2; RT_BLEND_STEPS is the ramp.
+export RT_STITCH="${RT_STITCH:-hold}"
+export RT_REPLAN_AT="${RT_REPLAN_AT:--1}"
+export RT_BLEND_STEPS="${RT_BLEND_STEPS:-4}"
+export RT_GRIPPER_HYST="${RT_GRIPPER_HYST:-0.4}"
 export PYTHONUNBUFFERED=1
 
 EMBODIMENT="${EMBODIMENT:-}"
@@ -56,7 +64,16 @@ PY=/opt/libero-venv/bin/python
 SERVER="${SERVER:-/ryzers/interactive_server_rt.py}"
 [ -f "$SERVER" ] || SERVER="$(dirname "$0")/interactive_server_rt.py"
 
-echo "Real-time demo | arm=${EMBODIMENT:-panda} suite=$SUITE task_id=$TASK_ID seed=$SEED think=$THINK num_steps=$NUM_STEPS port=$PORT hz=$RT_HZ"
+# Load the policy in bf16 (matches the validated DROID bench: ~0.6 s/plan vs ~3.2 s for
+# the lerobot loader's default fp32 on gfx1151). This is the deployment-realistic regime
+# where async chunk blending can actually hide planner latency. Applies an idempotent
+# patch to the installed lerobot loader; override with MOLMOACT2_DTYPE=float32 to revert.
+export MOLMOACT2_DTYPE="${MOLMOACT2_DTYPE:-bfloat16}"
+DTYPE_PATCH="$(dirname "$SERVER")/apply_dtype_patch.py"
+[ -f "$DTYPE_PATCH" ] || DTYPE_PATCH="$(dirname "$0")/apply_dtype_patch.py"
+[ -f "$DTYPE_PATCH" ] && "$PY" "$DTYPE_PATCH" || echo "[dtype] patch not found; using loader default"
+
+echo "Real-time demo | arm=${EMBODIMENT:-panda} suite=$SUITE task_id=$TASK_ID seed=$SEED think=$THINK num_steps=$NUM_STEPS port=$PORT hz=$RT_HZ stitch=$RT_STITCH replan_at=$RT_REPLAN_AT blend=$RT_BLEND_STEPS"
 echo "Open http://localhost:$PORT in your browser (remote box: ssh -L $PORT:localhost:$PORT <host>)"
 if [ -n "$EMBODIMENT" ] && [ "${EMBODIMENT,,}" != "panda" ]; then
   EMB_DIR="$(dirname "$SERVER")"

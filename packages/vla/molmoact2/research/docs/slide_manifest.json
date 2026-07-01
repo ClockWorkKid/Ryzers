@@ -1,0 +1,607 @@
+[
+  {
+    "slide": 1,
+    "texts": [
+      "MolmoAct2 on AMD Strix Halo",
+      "Making it faster on local compute",
+      "Identifying the compute bottlenecks",
+      "\u00b7",
+      "Where can we be faster",
+      "\u00b7",
+      "Smoother actions through blending",
+      "\u00b7",
+      "Attention guided pruning",
+      "Target:",
+      "Smooth and real-time action policy on Ryzen AI MAX+ 39",
+      "5"
+    ],
+    "refs": []
+  },
+  {
+    "slide": 2,
+    "texts": [
+      "What is MolmoAct2?",
+      "Ai2's fully-open Vision-Language-Action 'action reasoning' model",
+      "\u25aa  A VLA = a VLM backbone that perceives + reasons, grafted to a continuous action head.",
+      "\u25aa  Molmo2-ER backbone: Qwen3-4B LLM + SigLIP2",
+      "ViT",
+      "\u25aa",
+      "DiT",
+      "flow-matching action expert: denoises future action chunks; conditioned on the VLM via per-layer KV cross-attention.",
+      "\u25aa",
+      "OpenFAST",
+      "action tokenizer (2048 vocab) for the discrete/AR pretraining path; continuous flow path used at deployment.",
+      "\u25aa  MolmoAct2-Think: optional adaptive depth-token reasoning (Depth-Anything-V2 + VQ-VAE 10x10x128).",
+      "\u25aa",
+      "Current model does not run on the",
+      "strix",
+      "-halo in real-time under bf16 quantization, how to make it faster?",
+      "Inputs",
+      "multi-cam RGB +\nstate[8] + language",
+      "SigLIP2",
+      "ViT",
+      "+ Connector",
+      "pool 3rd/9th-last\n\u2192 MLP project",
+      "Qwen3-4B VLM",
+      "36 layers \u00b7 runs\nONCE / step (~550ms)",
+      "DiT Flow Expert",
+      "36 layers \u00b7 flow loop\n~20 ms / step",
+      "Action chunk",
+      "(15,8) abs joint\n+ gripper \u2192 robot",
+      "per-layer KV: VLM layer-\u2113 (K,V) \u2192 adapters P\u2096,P\u1d65 \u2192 cross-attn of expert block \u2113"
+    ],
+    "refs": []
+  },
+  {
+    "slide": 3,
+    "texts": [
+      "Milestones",
+      "Shipped as",
+      "MolmoAct2",
+      "Ryzers",
+      "package",
+      "Milestone",
+      "Description",
+      "Status",
+      "F",
+      "ull-model smoke",
+      "MolmoAct2-DROID load + 1 prediction on ROCm",
+      "\u2705",
+      "DROID open-loop replay",
+      "numeric correctness vs teleop GT (video+plot)",
+      "\u2705",
+      "LIBERO closed-loop",
+      "task success in MuJoCo sim (40-rollout sweep)",
+      "\u2705",
+      "Interactive (synchronous",
+      "- idealistic",
+      ")",
+      "live browser-driven chunkwise control",
+      "\u2705",
+      "Real-time (async",
+      "hronous - realistic",
+      ")",
+      "sim runs while planner thinks; hold-while-thinking",
+      "\u2705",
+      "UR5e + XARM6 Cross Embodiment",
+      "Trying to see if policy works across models",
+      "\u2705",
+      "Has a",
+      "ryzers",
+      "Having it up on",
+      "Github",
+      "for sending to people",
+      "\u2705",
+      "Post-",
+      "ViT",
+      "Random Token Pruning",
+      "Sending less vision tokens to VLM makes it run faster",
+      "\u2705",
+      "Action blending",
+      "Running the model as soon as observations stream in",
+      "\u2705",
+      "Pre-",
+      "ViT",
+      "Random token Pruning",
+      "Trying to save compute on the vision encoder too",
+      "\u26a0\ufe0f",
+      "Attention guided token pruning",
+      "Deterministically pruning vision patches/tokens",
+      "\u26a0\ufe0f\u26a0\ufe0f"
+    ],
+    "refs": []
+  },
+  {
+    "slide": 4,
+    "texts": [
+      "Real-time demo (asynchronous)",
+      "sim thread @20 Hz + async planner thread; arm HOLDS while thinking",
+      "goal_0",
+      "object_3",
+      "spatial_9",
+      "Task",
+      "\uf0e0",
+      "Observation",
+      "\uf0e0",
+      "Decision",
+      "\uf0e0",
+      "Rollout",
+      "\uf0e0",
+      "Hold",
+      "\uf0e0 Done",
+      "|________________________________________|"
+    ],
+    "refs": [
+      {
+        "rid": "rId1",
+        "type": "http://schemas.microsoft.com/office/2007/relationships/media",
+        "target": "../media/media1.mp4"
+      },
+      {
+        "rid": "rId8",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "target": "../media/image1.png"
+      },
+      {
+        "rid": "rId3",
+        "type": "http://schemas.microsoft.com/office/2007/relationships/media",
+        "target": "../media/media2.mp4"
+      },
+      {
+        "rid": "rId9",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "target": "../media/image2.png"
+      },
+      {
+        "rid": "rId5",
+        "type": "http://schemas.microsoft.com/office/2007/relationships/media",
+        "target": "../media/media3.mp4"
+      },
+      {
+        "rid": "rId10",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "target": "../media/image3.png"
+      },
+      {
+        "rid": "rId2",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/video",
+        "target": "../media/media1.mp4"
+      },
+      {
+        "rid": "rId4",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/video",
+        "target": "../media/media2.mp4"
+      },
+      {
+        "rid": "rId6",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/video",
+        "target": "../media/media3.mp4"
+      }
+    ]
+  },
+  {
+    "slide": 5,
+    "texts": [
+      "Cross Embodiment Test",
+      "Trying out MolmoAct2 Policy with UR5e and XARM6 robot arms",
+      "Panda Franka",
+      "XARM6",
+      "UR5e",
+      "Task",
+      "\uf0e0",
+      "Observation",
+      "\uf0e0",
+      "Decision",
+      "\uf0e0",
+      "IK Transform",
+      "\uf0e0",
+      "Rollout",
+      "\uf0e0 Done",
+      "|_______________________________________________|"
+    ],
+    "refs": [
+      {
+        "rid": "rId1",
+        "type": "http://schemas.microsoft.com/office/2007/relationships/media",
+        "target": "../media/media4.mp4"
+      },
+      {
+        "rid": "rId8",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "target": "../media/image4.png"
+      },
+      {
+        "rid": "rId3",
+        "type": "http://schemas.microsoft.com/office/2007/relationships/media",
+        "target": "../media/media5.mp4"
+      },
+      {
+        "rid": "rId9",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "target": "../media/image5.png"
+      },
+      {
+        "rid": "rId5",
+        "type": "http://schemas.microsoft.com/office/2007/relationships/media",
+        "target": "../media/media6.mp4"
+      },
+      {
+        "rid": "rId10",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "target": "../media/image6.png"
+      },
+      {
+        "rid": "rId2",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/video",
+        "target": "../media/media4.mp4"
+      },
+      {
+        "rid": "rId4",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/video",
+        "target": "../media/media5.mp4"
+      },
+      {
+        "rid": "rId6",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/video",
+        "target": "../media/media6.mp4"
+      }
+    ]
+  },
+  {
+    "slide": 6,
+    "texts": [
+      "Targeting Efficiency",
+      "How to make the model run faster and smoother on",
+      "strix",
+      "-halo",
+      "Inputs",
+      "multi-cam RGB +\nstate[8] + language",
+      "SigLIP2",
+      "ViT",
+      "+ Connector",
+      "pool 3rd/9th-last\n\u2192 MLP project",
+      "Qwen3-4B VLM",
+      "36 layers \u00b7 runs\nONCE / step (~550ms)",
+      "DiT Flow Expert",
+      "36 layers \u00b7 flow loop\n~20 ms / step",
+      "Action chunk",
+      "(15,8) abs joint\n+ gripper \u2192 robot",
+      "Blocks that consume compute",
+      "One pass chunks out 15 action steps",
+      "238",
+      "284",
+      "79",
+      "601ms @bf16"
+    ],
+    "refs": [
+      {
+        "rid": "rId3",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "target": "../media/image7.png"
+      }
+    ]
+  },
+  {
+    "slide": 7,
+    "texts": [
+      "Targeting Efficiency",
+      "Why we need to make it faster and smoother"
+    ],
+    "refs": [
+      {
+        "rid": "rId5",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "target": "../media/image7.png"
+      },
+      {
+        "rid": "rId1",
+        "type": "http://schemas.microsoft.com/office/2007/relationships/media",
+        "target": "../media/media7.mp4"
+      },
+      {
+        "rid": "rId6",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "target": "../media/image8.png"
+      },
+      {
+        "rid": "rId2",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/video",
+        "target": "../media/media7.mp4"
+      }
+    ]
+  },
+  {
+    "slide": 8,
+    "texts": [
+      "Token Pruning 1 \u2013 Post-",
+      "ViT",
+      "Random Drop",
+      "Reducing the input token count to the VLM backbone",
+      "Inputs",
+      "multi-cam RGB +\nstate[8] + language",
+      "SigLIP2",
+      "ViT",
+      "+ Connector",
+      "pool 3rd/9th-last\n\u2192 MLP project",
+      "Qwen3-4B VLM",
+      "36 layers \u00b7 runs\nONCE / step (~550ms)",
+      "DiT Flow Expert",
+      "36 layers \u00b7 flow loop\n~20 ms / step",
+      "Action chunk",
+      "(15,8) abs joint\n+ gripper \u2192 robot",
+      "Prune the tokens here, keep x% tokens"
+    ],
+    "refs": [
+      {
+        "rid": "rId3",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "target": "../media/image9.png"
+      }
+    ]
+  },
+  {
+    "slide": 9,
+    "texts": [
+      "Token Pruning 1 \u2013 Post-",
+      "ViT",
+      "Random Drop",
+      "Reducing the input token count to the VLM backbone",
+      "Inputs",
+      "multi-cam RGB +\nstate[8] + language",
+      "SigLIP2",
+      "ViT",
+      "+ Connector",
+      "pool 3rd/9th-last\n\u2192 MLP project",
+      "Qwen3-4B VLM",
+      "36 layers \u00b7 runs\nONCE / step (~550ms)",
+      "DiT Flow Expert",
+      "36 layers \u00b7 flow loop\n~20 ms / step",
+      "Action chunk",
+      "(15,8) abs joint\n+ gripper \u2192 robot",
+      "Prune the tokens here, keep x% tokens"
+    ],
+    "refs": [
+      {
+        "rid": "rId3",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "target": "../media/image10.png"
+      }
+    ]
+  },
+  {
+    "slide": 10,
+    "texts": [
+      "Token Pruning 2 \u2013 Pre-",
+      "ViT",
+      "Random Drop",
+      "Reducing the input token count to the VLM backbone",
+      "Inputs",
+      "multi-cam RGB +\nstate[8] + language",
+      "SigLIP2",
+      "ViT",
+      "+ Connector",
+      "pool 3rd/9th-last\n\u2192 MLP project",
+      "Qwen3-4B VLM",
+      "36 layers \u00b7 runs\nONCE / step (~550ms)",
+      "DiT Flow Expert",
+      "36 layers \u00b7 flow loop\n~20 ms / step",
+      "Action chunk",
+      "(15,8) abs joint\n+ gripper \u2192 robot",
+      "Prune the patches here, keep x% patch groups",
+      "\uf0df",
+      "50 percent is a good working point"
+    ],
+    "refs": [
+      {
+        "rid": "rId3",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "target": "../media/image11.png"
+      },
+      {
+        "rid": "rId4",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "target": "../media/image12.png"
+      }
+    ]
+  },
+  {
+    "slide": 11,
+    "texts": [
+      "Action Blending",
+      "Don\u2019t wait for task to complete",
+      "\uf0e0",
+      "start working as soon as observations are available"
+    ],
+    "refs": [
+      {
+        "rid": "rId3",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "target": "../media/image7.png"
+      }
+    ]
+  },
+  {
+    "slide": 12,
+    "texts": [
+      "Action Blending",
+      "Don\u2019t wait for task to complete",
+      "\uf0e0",
+      "start working as soon as observations are available"
+    ],
+    "refs": [
+      {
+        "rid": "rId1",
+        "type": "http://schemas.microsoft.com/office/2007/relationships/media",
+        "target": "../media/media8.mp4"
+      },
+      {
+        "rid": "rId5",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "target": "../media/image13.png"
+      },
+      {
+        "rid": "rId2",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/video",
+        "target": "../media/media8.mp4"
+      }
+    ]
+  },
+  {
+    "slide": 13,
+    "texts": [
+      "Feedback?",
+      "Don\u2019t prune tokens randomly, prune based on feedback",
+      "Transformer VLM blocks have a neat feature",
+      "\uf0e0 we can observe attention scores between task",
+      "Reference:",
+      "https://github.com/CognitiveAISystems/BlindVLA"
+    ],
+    "refs": [
+      {
+        "rid": "rId3",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "target": "../media/image14.png"
+      }
+    ]
+  },
+  {
+    "slide": 14,
+    "texts": [
+      "Feedback From Where?",
+      "Action-Vision attention or Action-Text attention",
+      "Vision-Text attention: Performs less",
+      "Vision-Action attention: Performs better"
+    ],
+    "refs": [
+      {
+        "rid": "rId3",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "target": "../media/image15.png"
+      }
+    ]
+  },
+  {
+    "slide": 15,
+    "texts": [
+      "Action-Attention Pruning Pre-",
+      "ViT",
+      "Keep only the important patches from action attention",
+      "Inputs",
+      "multi-cam RGB +\nstate[8] + language",
+      "SigLIP2",
+      "ViT",
+      "+ Connector",
+      "pool 3rd/9th-last\n\u2192 MLP project",
+      "Qwen3-4B VLM",
+      "36 layers \u00b7 runs\nONCE / step (~550ms)",
+      "DiT Flow Expert",
+      "36 layers \u00b7 flow loop\n~20 ms / step",
+      "Action chunk",
+      "(15,8) abs joint\n+ gripper \u2192 robot",
+      "Prune patches, keep x% patch groups"
+    ],
+    "refs": [
+      {
+        "rid": "rId3",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "target": "../media/image16.png"
+      }
+    ]
+  },
+  {
+    "slide": 16,
+    "texts": [
+      "Action-Attention Pruning Post-",
+      "ViT",
+      "Keep only the important tokens from action attention",
+      "Inputs",
+      "multi-cam RGB +\nstate[8] + language",
+      "SigLIP2",
+      "ViT",
+      "+ Connector",
+      "pool 3rd/9th-last\n\u2192 MLP project",
+      "Qwen3-4B VLM",
+      "36 layers \u00b7 runs\nONCE / step (~550ms)",
+      "DiT Flow Expert",
+      "36 layers \u00b7 flow loop\n~20 ms / step",
+      "Action chunk",
+      "(15,8) abs joint\n+ gripper \u2192 robot",
+      "Prune tokens, keep x% tokens"
+    ],
+    "refs": [
+      {
+        "rid": "rId3",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "target": "../media/image17.png"
+      }
+    ]
+  },
+  {
+    "slide": 17,
+    "texts": [
+      "What Does the Model See?",
+      "A look into the pruning experiment",
+      "25%",
+      "\uf0e0",
+      "tokens",
+      "\uf0df",
+      "50%",
+      "tokens"
+    ],
+    "refs": [
+      {
+        "rid": "rId1",
+        "type": "http://schemas.microsoft.com/office/2007/relationships/media",
+        "target": "../media/media9.mp4"
+      },
+      {
+        "rid": "rId7",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "target": "../media/image18.png"
+      },
+      {
+        "rid": "rId3",
+        "type": "http://schemas.microsoft.com/office/2007/relationships/media",
+        "target": "../media/media10.mp4"
+      },
+      {
+        "rid": "rId8",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "target": "../media/image19.png"
+      },
+      {
+        "rid": "rId2",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/video",
+        "target": "../media/media9.mp4"
+      },
+      {
+        "rid": "rId4",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/video",
+        "target": "../media/media10.mp4"
+      }
+    ]
+  },
+  {
+    "slide": 18,
+    "texts": [
+      "Is It Useful?",
+      "An unfortunate outcome \u2013 but without any sort of training so there is hope!",
+      "Post-",
+      "ViT",
+      "guided pruning still underperforms compared to random pruning (Pre-",
+      "ViT",
+      "has it worse)",
+      "We don\u2019t have a real-time feedback mechanism yet",
+      "Right now we are doing a dual pass through the VLM to find attention scores.",
+      "Camera inputs change after taking action \u2013 feedback from previous state is sort of useless.",
+      "We need a WAM style predictor to determine where to focus next."
+    ],
+    "refs": [
+      {
+        "rid": "rId3",
+        "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "target": "../media/image20.png"
+      }
+    ]
+  }
+]
