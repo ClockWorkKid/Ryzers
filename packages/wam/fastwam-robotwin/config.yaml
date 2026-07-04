@@ -1,0 +1,31 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Layers the RoboTwin 2.0 (SAPIEN/Vulkan) closed-loop stack on the fastwam image.
+# Built as a chain on top of the core package (see README):
+#   ryzers build fastwam fastwam-robotwin --name fastwam-robotwin
+
+gpu_support: true
+x11_display: false
+
+environment_variables:
+- "HSA_OVERRIDE_GFX_VERSION=11.5.1"
+- "HF_HOME=/root/.cache/huggingface"
+- 'HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET:-1}'
+- 'HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER:-0}'
+- 'HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT:-60}'
+- "HF_HUB_DISABLE_TELEMETRY=1"
+- "TOKENIZERS_PARALLELISM=false"
+- "DIFFSYNTH_MODEL_BASE_PATH=/models/diffsynth"
+- "TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1"
+- "TORCH_BLAS_PREFER_HIPBLASLT=0"
+- "OUT_DIR=/outputs"
+- 'HF_TOKEN=${HF_TOKEN:-}'
+- 'TASKS=${TASKS:-}'
+- 'TASK_CONFIG=${TASK_CONFIG:-}'
+- 'NUM_EPISODES=${NUM_EPISODES:-}'
+
+volume_mappings:
+- "$PWD/workspace/fastwam/outputs:/outputs"
+- "$PWD/workspace/fastwam/models:/models"
+- "$PWD/workspace/.cache/huggingface:/root/.cache/huggingface"
