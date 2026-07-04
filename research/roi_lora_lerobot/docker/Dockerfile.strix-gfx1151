@@ -40,6 +40,32 @@ RUN set -e; \
       "datasets>=4.7.0,<5.0.0" "pandas>=2.0.0,<3.0.0" "pyarrow>=21.0.0,<30.0.0" \
       "av>=12,<14" "accelerate>=1.14,<2.0"
 
+# Patch: make processor-override validation warn-and-skip instead of raising on
+# unmatched keys. On --resume, lerobot re-applies generic override keys
+# (normalizer_processor / unnormalizer_processor) that the molmoact2 pipeline
+# names differently (molmoact2_masked_normalizer / ..._unnormalizer). The saved
+# steps already carry their normalization state, so skipping is safe; without
+# this, resuming a molmoact2 run crashes with KeyError.
+RUN python - <<'PY'
+p = "/opt/lerobot/src/lerobot/processor/pipeline.py"
+s = open(p, encoding="utf-8").read()
+OLD = '''        raise KeyError(
+            f"Override keys {list(remaining_override_keys)} do not match any step in the saved configuration. "
+            f"Available step keys: {available_keys}. "
+            f"Make sure override keys match exact step class names or registry names."
+        )'''
+NEW = '''        import logging as _logging
+        _logging.getLogger("lerobot").warning(
+            f"Override keys {list(remaining_override_keys)} do not match any step in the saved configuration. "
+            f"Available step keys: {available_keys}. Skipping unmatched overrides "
+            f"(safe on resume: saved steps retain their persisted state)."
+        )
+        return'''
+assert OLD in s, "resume patch target not found in pipeline.py"
+open(p, "w", encoding="utf-8").write(s.replace(OLD, NEW, 1))
+print("resume override patch applied")
+PY
+
 # Sanity: imports + the torch trio must stay ROCm; verify config knobs present.
 RUN python - <<'PY'
 import torch, lerobot, transformers, peft, datasets, av, numpy
