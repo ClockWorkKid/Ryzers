@@ -1,0 +1,53 @@
+# MolmoAct2 + LeRobot LoRA training image — AMD Strix Halo APU (gfx1151).
+# Codifies the working install validated on the Strix Halo dev box
+# (image molmoact2-lerobot-train:rocm): 10-step LoRA-VLM smoke passes (rc=0).
+#
+# Base: the Ryzers ROCm 7.2 / torch 2.10 env image (gfx1151). Build it first via
+# the ryzers package system (packages/init/ryzer_env), then:
+#   docker build -t molmoact2-lerobot-train:rocm -f Dockerfile.strix-gfx1151 .
+FROM ryzer_env:latest
+SHELL ["/bin/bash", "-lc"]
+
+# Exact LeRobot commit that ships the molmoact2 policy (0.5.2 dev; not on PyPI).
+ARG LEROBOT_COMMIT=052d329
+
+# Strix Halo runtime knobs (gfx1151 has no native ROCm target -> override to
+# gfx1150/11.5.1) + AOTriton experimental attention + hipBLASLt fallback routing.
+# These are runtime-relevant; keep them as image defaults for convenience.
+ENV HSA_OVERRIDE_GFX_VERSION=11.5.1 \
+    TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1 \
+    TORCH_BLAS_PREFER_HIPBLASLT=0
+
+# System deps: ffmpeg headers so PyAV can build (no manylinux wheel matched here).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ffmpeg pkg-config \
+      libavformat-dev libavcodec-dev libavdevice-dev libavutil-dev \
+      libavfilter-dev libswscale-dev libswresample-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Constraint pins the base torch trio by PUBLIC version (local +rocm segment
+# stripped) so pip keeps the installed ROCm wheels instead of pulling CUDA ones.
+# We install lerobot[molmoact2] plus the [dataset] deps EXCEPT torchcodec, which
+# hard-pins torch and does not load on ROCm; video decoding uses pyav (av).
+RUN set -e; \
+    python -c "import torch;print('torch=='+torch.__version__.split('+')[0])" > /tmp/con.txt; \
+    python -c "import torchvision;print('torchvision=='+torchvision.__version__.split('+')[0])" >> /tmp/con.txt 2>/dev/null || true; \
+    python -c "import torchaudio;print('torchaudio=='+torchaudio.__version__.split('+')[0])" >> /tmp/con.txt 2>/dev/null || true; \
+    echo "=== torch constraint ==="; cat /tmp/con.txt; \
+    git clone https://github.com/huggingface/lerobot.git /opt/lerobot; \
+    cd /opt/lerobot && git checkout ${LEROBOT_COMMIT}; \
+    pip install --no-cache-dir -c /tmp/con.txt -e ".[molmoact2]" \
+      "datasets>=4.7.0,<5.0.0" "pandas>=2.0.0,<3.0.0" "pyarrow>=21.0.0,<30.0.0" \
+      "av>=12,<14" "accelerate>=1.14,<2.0"
+
+# Sanity: imports + the torch trio must stay ROCm; verify config knobs present.
+RUN python - <<'PY'
+import torch, lerobot, transformers, peft, datasets, av, numpy
+assert "+rocm" in torch.__version__ or torch.version.hip, f"torch not ROCm: {torch.__version__}"
+print("torch", torch.__version__, "| hip", torch.version.hip)
+print("lerobot", getattr(lerobot,"__version__","?"), "| transformers", transformers.__version__,
+      "| peft", peft.__version__, "| datasets", datasets.__version__,
+      "| av", av.__version__, "| numpy", numpy.__version__)
+from lerobot.policies.molmoact2.configuration_molmoact2 import MolmoAct2Config
+print("MolmoAct2Config OK; enable_lora_vlm default:", MolmoAct2Config().enable_lora_vlm)
+PY
