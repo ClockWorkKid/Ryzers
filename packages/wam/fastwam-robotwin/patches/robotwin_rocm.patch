@@ -1,8 +1,67 @@
 diff --git a/third_party/RoboTwin/envs/_base_task.py b/third_party/RoboTwin/envs/_base_task.py
-index 67979f4..2f87dbe 100644
+index 67979f4..49897c0 100644
 --- a/third_party/RoboTwin/envs/_base_task.py
 +++ b/third_party/RoboTwin/envs/_base_task.py
-@@ -237,7 +237,7 @@ class Base_Task(gym.Env):
+@@ -39,16 +39,40 @@ class Base_Task(gym.Env):
+         pass
+ 
+     def _get_eval_video_frame(self):
+-        obs = self.now_obs["observation"]
+-        head_rgb = obs["head_camera"]["rgb"]
++        # Render the current scene live for every eval frame so all panels are
++        # continuous during policy execution. The policy only refreshes
++        # self.now_obs at replan boundaries, so reading it here made the head and
++        # wrist panels jump from keyframe to keyframe (only the live-rendered
++        # observer stayed smooth).
++        self._update_render()
++        self.cameras.update_picture()
++        rgb = self.cameras.get_rgb()
++        head_rgb = rgb["head_camera"]["rgb"]
+ 
+-        if "left_camera" not in obs or "right_camera" not in obs:
++        if "left_camera" not in rgb or "right_camera" not in rgb:
+             return head_rgb
+ 
+-        left_rgb = obs["left_camera"]["rgb"]
+-        right_rgb = obs["right_camera"]["rgb"]
++        left_rgb = rgb["left_camera"]["rgb"]
++        right_rgb = rgb["right_camera"]["rgb"]
+         bottom_rgb = np.concatenate([left_rgb, right_rgb], axis=1)
+-        target_w = max(head_rgb.shape[1], bottom_rgb.shape[1])
++
++        # Top row = [head | third-person observer]. The observer is a sim-only
++        # camera (absent from the dataset / policy input); rendering it here fills
++        # the quadrant that is otherwise zero-padded, since the head cam is
++        # narrower than the two wrist cams placed side by side.
++        top_rgb = head_rgb
++        try:
++            h, w = head_rgb.shape[:2]
++            observer_rgb = np.asarray(self.cameras.get_observer_rgb())[:, :, :3]
++            if observer_rgb.shape[:2] != (h, w):
++                ys = np.linspace(0, observer_rgb.shape[0] - 1, h).astype(np.int64)
++                xs = np.linspace(0, observer_rgb.shape[1] - 1, w).astype(np.int64)
++                observer_rgb = observer_rgb[ys][:, xs]
++            top_rgb = np.concatenate([head_rgb, observer_rgb], axis=1)
++        except Exception:
++            top_rgb = head_rgb
++
++        target_w = max(top_rgb.shape[1], bottom_rgb.shape[1])
+ 
+         def _pad_width(rgb, width):
+             if rgb.shape[1] == width:
+@@ -58,9 +82,9 @@ class Base_Task(gym.Env):
+             pad_w = width - rgb.shape[1]
+             return np.pad(rgb, ((0, 0), (0, pad_w), (0, 0)), mode="constant")
+ 
+-        head_rgb = _pad_width(head_rgb, target_w)
++        top_rgb = _pad_width(top_rgb, target_w)
+         bottom_rgb = _pad_width(bottom_rgb, target_w)
+-        return np.concatenate([head_rgb, bottom_rgb], axis=0)
++        return np.concatenate([top_rgb, bottom_rgb], axis=0)
+ 
+     # =========================================================== Init Task Env ===========================================================
+     def _init_task_env_(self, table_xy_bias=[0, 0], table_height_bias=0, **kwags):
+@@ -237,7 +261,7 @@ class Base_Task(gym.Env):
          sapien.render.set_camera_shader_dir("rt")
          sapien.render.set_ray_tracing_samples_per_pixel(32)
          sapien.render.set_ray_tracing_path_depth(8)
