@@ -27,6 +27,8 @@ environment_variables:
 - 'PORT=${PORT:-}'
 - 'VIEW_RES=${VIEW_RES:-}'
 - 'VIDEO_RES=${VIDEO_RES:-}'
+- 'RENDER_RES=${RENDER_RES:-}'
+- 'MAX_STEPS=${MAX_STEPS:-}'
 - 'RT_HZ=${RT_HZ:-}'
 # Policy selection: module:function returning a sim_libero.Policy (default RandomPolicy).
 - 'POLICY_FACTORY=${POLICY_FACTORY:-}'

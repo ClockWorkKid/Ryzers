@@ -67,12 +67,17 @@ def banner_frame(rgb, text, size, tag=""):
 
 
 def save_mp4(frames, path, fps=15):
-    """Save RGB frames to an MP4 (H.264, yuv420p). Frames must share even dimensions."""
+    """Save RGB frames to an MP4 (H.264, yuv420p). Frames must share even dimensions.
+
+    imageio-ffmpeg already injects `-pix_fmt yuv420p` for libx264, so we set it via the
+    writer's `pixelformat` (not output_params) to avoid ffmpeg's "Multiple -pix_fmt
+    options" warning from passing it twice.
+    """
     import imageio
 
     with imageio.get_writer(
         path, fps=fps, codec="libx264", quality=8,
-        macro_block_size=1, output_params=["-pix_fmt", "yuv420p"],
+        macro_block_size=1, pixelformat="yuv420p",
     ) as w:
         for fr in frames:
             w.append_data(np.ascontiguousarray(fr))

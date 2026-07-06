@@ -7,7 +7,28 @@ zero dependency on any policy/model repo. Provides just the pieces a closed-loop
 interactive harness needs: build an env for a benchmark task, pull the agentview+wrist
 image, the no-op action, per-suite horizons, and the list of shipped suites.
 """
+import contextlib
+import logging
+import os
 import pathlib
+import warnings
+
+# Quiet the noisy third-party import chatter (not errors). robosuite logs a "no private
+# macro file" WARNING via its logger; gym prints its "unmaintained / NumPy 2.0" notice
+# straight to stderr at import time (NOT through warnings, so a filter can't catch it).
+# Suppress robosuite by raising its logger to ERROR, and gym by eagerly importing it once
+# with stderr redirected -- later imports (by libero/robosuite) hit the module cache and
+# stay quiet. Real errors still propagate (logger level is ERROR, not CRITICAL).
+for _name in ("robosuite_logs", "robosuite"):
+    logging.getLogger(_name).setLevel(logging.ERROR)
+with contextlib.redirect_stderr(open(os.devnull, "w")):
+    try:
+        import gym  # noqa: F401
+    except Exception:  # noqa: BLE001
+        pass
+# Set the warnings filter AFTER importing gym: gym resets the warnings registry on import,
+# which would otherwise wipe this filter and let robosuite's deprecated-.warn() notice leak.
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 import numpy as np
 from libero.libero import benchmark as _benchmark
@@ -35,6 +56,28 @@ def get_max_steps(task_suite_name):
 
 def get_benchmark_dict():
     return _benchmark.get_benchmark_dict()
+
+
+def list_envs():
+    """Enumerate every shipped (suite, task_id, description) for the env-picker dropdown.
+
+    Cheap: reads task metadata from the benchmark registry without building any sim env.
+    """
+    out = []
+    bench = get_benchmark_dict()
+    for suite in SUITES:
+        try:
+            task_suite = bench[suite]()
+            n_tasks = int(getattr(task_suite, "n_tasks", 0))
+            for task_id in range(n_tasks):
+                out.append({
+                    "suite": suite,
+                    "task_id": task_id,
+                    "description": task_suite.get_task(task_id).language,
+                })
+        except Exception:  # noqa: BLE001 - skip a suite that fails to enumerate
+            continue
+    return out
 
 
 def get_libero_env(task, resolution, seed):

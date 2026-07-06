@@ -29,6 +29,30 @@ def _instantiate_task(task_name):
     return env_class()
 
 
+def list_tasks():
+    """Enumerate available RoboTwin task names (envs/<task>.py) for the env-picker dropdown.
+
+    Best-effort: lists modules under envs/ whose file name matches a task class, skipping the
+    base/util modules. A task that fails to build is caught at build time, so an over-broad
+    entry is harmless.
+    """
+    _ensure_cwd()
+    envs_dir = os.path.join(ROBOTWIN_ROOT, "envs")
+    skip = {"__init__", "utils", "camera"}
+    names = []
+    try:
+        for fn in sorted(os.listdir(envs_dir)):
+            if not fn.endswith(".py"):
+                continue
+            name = fn[:-3]
+            if name.startswith("_") or name in skip:
+                continue
+            names.append(name)
+    except OSError:
+        pass
+    return names
+
+
 def load_task_args(task_name, task_config):
     """Build the RoboTwin `args` dict for a task (mirrors eval_policy.py / collect_data.py)."""
     _ensure_cwd()
@@ -115,6 +139,41 @@ class RoboTwinScene:
     def set_instruction(self, instruction):
         self.instruction = instruction
         self.env.set_instruction(instruction=instruction)
+
+    def scene_objects(self):
+        """Best-effort list of manipulable objects placed in the scene.
+
+        RoboTwin tasks store their actors as instance attributes on the env. We first try a
+        segmentation/actor registry if present, then fall back to scanning for SAPIEN
+        entity-like attributes (have get_pose + get_name), excluding the robots/table. Purely
+        cosmetic for the viewport panel, so any failure yields an empty list.
+        """
+        env = self.env
+        names = []
+        try:
+            reg = getattr(env, "actor_name_dic", None)
+            if isinstance(reg, dict) and reg:
+                names = list(reg.keys())
+        except Exception:  # noqa: BLE001
+            names = []
+        if not names:
+            drop = {"robot", "left_robot", "right_robot", "table", "wall", "ground",
+                    "plane", "arena"}
+            try:
+                for key, val in vars(env).items():
+                    if key.startswith("_") or key in drop:
+                        continue
+                    if hasattr(val, "get_pose") and hasattr(val, "get_name"):
+                        names.append(key)
+            except Exception:  # noqa: BLE001
+                pass
+        seen, out = set(), []
+        for n in names:
+            label = str(n).replace("_", " ").strip()
+            if label and label not in seen:
+                seen.add(label)
+                out.append(label)
+        return out
 
     @property
     def step_lim(self):

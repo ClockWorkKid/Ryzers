@@ -36,6 +36,7 @@ environment_variables:
 - 'NUM_EPISODES=${NUM_EPISODES:-}'
 - 'PORT=${PORT:-}'
 - 'VIEW_RES=${VIEW_RES:-}'
+- 'VIDEO_RES=${VIDEO_RES:-}'
 - 'RT_HZ=${RT_HZ:-}'
 - 'MAX_STEPS=${MAX_STEPS:-}'
 # Policy selection: module:function returning a sim_robotwin.Policy (default RandomPolicy).
