@@ -9,6 +9,11 @@
 #   ryzers run /ryzers/demos/demo_closedloop_libero.sh
 #   NUM_TASKS=1 NUM_TRIALS=3 VISUALIZE_FUTURE=true ryzers run /ryzers/demos/demo_closedloop_libero.sh
 set -uo pipefail
+if [ ! -d /opt/LIBERO ]; then
+  echo "ERROR: simulation/libero base not found (no /opt/LIBERO)." >&2
+  echo "       Build the chain:  ryzers build libero fastwam" >&2
+  exit 1
+fi
 SUITE="${SUITE:-libero_object}"
 NUM_TASKS="${NUM_TASKS:-10}"
 NUM_TRIALS="${NUM_TRIALS:-20}"

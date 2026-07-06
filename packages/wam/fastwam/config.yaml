@@ -36,6 +36,24 @@ environment_variables:
 - 'NUM_EPISODES=${NUM_EPISODES:-}'
 - 'NUM_VIDEOS=${NUM_VIDEOS:-}'
 - 'VISUALIZE_FUTURE=${VISUALIZE_FUTURE:-}'
+# Interactive/real-time LIBERO demo knobs (require the simulation/libero base).
+- 'PORT=${PORT:-}'
+- 'VIEW_RES=${VIEW_RES:-}'
+- 'VIDEO_RES=${VIDEO_RES:-}'
+- 'RT_HZ=${RT_HZ:-}'
+- 'CKPT=${CKPT:-}'
+- 'DATASET_STATS=${DATASET_STATS:-}'
+- 'MIXED_PRECISION=${MIXED_PRECISION:-}'
+- 'NUM_INFERENCE_STEPS=${NUM_INFERENCE_STEPS:-}'
+- 'REPLAN_STEPS=${REPLAN_STEPS:-}'
+- 'NUM_STEPS_WAIT=${NUM_STEPS_WAIT:-}'
+- 'POLICY_FACTORY=${POLICY_FACTORY:-}'
+# Interactive/closed-loop RoboTwin demo knobs (require the simulation/robotwin base).
+- 'TASK=${TASK:-}'
+- 'TASKS=${TASKS:-}'
+- 'TASK_CONFIG=${TASK_CONFIG:-}'
+- 'MAX_STEPS=${MAX_STEPS:-}'
+- 'ACTION_HORIZON=${ACTION_HORIZON:-}'
 
 volume_mappings:
 - "$PWD/workspace/fastwam/outputs:/outputs"
