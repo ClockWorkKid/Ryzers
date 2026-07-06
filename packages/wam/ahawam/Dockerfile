@@ -32,16 +32,18 @@ RUN git clone https://github.com/serene-sivy/AHA-WAM /repos/ahawam && \
     git -C /repos/ahawam checkout ${AHAWAM_COMMIT}
 
 # ROCm port: strip the CUDA torch/torchvision/torchcodec pins (keep base ROCm torch) and
-# relax upstream's requires-python <3.11 so it installs on the base image's Python. Pin the
-# base's torch + numpy so the AHA-WAM install (and its extras) never replaces them -- this
-# lets one Dockerfile compose on the plain ROCm base (numpy 2.x) and on a simulator base
-# (numpy 1.26.4) identically. deepspeed is training-only and dropped for the eval/inference
-# image (its build pulls a CUDA toolchain); everything else keeps the exact upstream pins.
+# relax upstream's requires-python <3.11 so it installs on the base image's Python. Pin only
+# the base's torch stack for the AHA-WAM install so it can never pull CUDA torch; unlike
+# FastWAM, AHA-WAM hard-pins numpy==1.26.4, so we let it install that (it matches the
+# simulation/robotwin base's numpy exactly), then re-lock torch+numpy for the extras install.
+# deepspeed is training-only and dropped for the eval/inference image (its build pulls a CUDA
+# toolchain); everything else keeps the exact upstream pins.
 COPY scripts/strip_cuda_torch.py /ryzers/scripts/strip_cuda_torch.py
 RUN python /ryzers/scripts/strip_cuda_torch.py /repos/ahawam/pyproject.toml && \
     sed -i '/^\s*"deepspeed[=<>!~]/d' /repos/ahawam/pyproject.toml && \
-    pip freeze | grep -iE "^(torch|torchvision|torchcodec|numpy)==" > /opt/ahawam-constraints.txt && \
+    pip freeze | grep -iE "^(torch|torchvision|torchcodec)==" > /opt/ahawam-constraints.txt && \
     PIP_CONSTRAINT=/opt/ahawam-constraints.txt pip install --no-cache-dir -e /repos/ahawam && \
+    pip freeze | grep -iE "^(torch|torchvision|torchcodec|numpy)==" > /opt/ahawam-constraints.txt && \
     PIP_CONSTRAINT=/opt/ahawam-constraints.txt pip install --no-cache-dir \
       "hf-transfer>=0.1.8" "sentencepiece>=0.2" "matplotlib>=3.8" "opencv-python-headless"
 
