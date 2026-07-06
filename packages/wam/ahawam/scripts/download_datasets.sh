@@ -17,7 +17,7 @@ mkdir -p "$DATA"
 
 fetch_robotwin() {
   local tmp="$DATA/.dl_robotwin"; mkdir -p "$tmp"
-  hf_prefetch datasets/yuanty/robotwin2.0-fastwam --repo-type dataset --local-dir "$tmp"
+  hf_prefetch yuanty/robotwin2.0-fastwam --repo-type dataset --local-dir "$tmp"
   echo "concatenate split archives + extract"
   cat "$tmp"/robotwin2.0.tar.gz.part-* | tar -xzf - -C "$DATA"
   # Flatten if the archive nests robotwin2.0/robotwin2.0/.
