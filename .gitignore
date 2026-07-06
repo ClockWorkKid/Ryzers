@@ -70,3 +70,9 @@ dist/
 
 # docs
 docs/_build/
+
+# Ryzers-wam local workspace: model weights, rollout outputs, HF cache (never commit)
+workspace/
+
+# Auto-generated ryzers run wrappers (machine-specific)
+ryzers.run.*.sh
