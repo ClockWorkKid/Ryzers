@@ -6,8 +6,10 @@
 # stack plus the sim_robotwin harness (Policy seam + interactive/sanity runners and a
 # built-in scripted expert / random policy). No policy/model code lives here: any policy
 # chains on top of this image (ryzers build simulation/robotwin <policy>) and drops a
-# RoboTwin policy/<name> plugin selected at runtime. curobo (CUDA-only) is replaced by
-# mplib and the OIDN denoiser is disabled via patches/robotwin_rocm.patch. RoboTwin is
+# RoboTwin policy/<name> plugin selected at runtime. curobo (CUDA-only, and its NVIDIA
+# Warp dependency has no ROCm backend) is replaced by mplib; the OIDN denoiser is disabled
+# via patches/robotwin_rocm.patch. PyTorch3D is built from upstream (ROCm/HIP port) for
+# gfx1151 to provide the point-cloud ops (envs/camera.py FPS/kNN, 3D policies). RoboTwin is
 # cloned from upstream at a pinned commit (de-vendored); sim assets are third-party and
 # fetched at runtime by scripts/setup_robotwin.sh, never baked here.
 
@@ -42,6 +44,23 @@ RUN pip freeze | grep -iE "^(torch|torchvision|torchcodec)==" > /opt/torch-const
     PIP_CONSTRAINT=/opt/torch-constraints.txt pip install --no-cache-dir --no-deps "mplib==0.2.1" && \
     pip install --no-cache-dir "numpy==1.26.4"
 
+# PyTorch3D (ROCm/HIP) built from upstream at a pinned commit for gfx1151. Enables the
+# point-cloud ops (pytorch3d.ops FPS/kNN used by envs/camera.py and 3D policies like DP3)
+# on AMD. Upstream added ROCm support in facebookresearch/pytorch3d PR #2039: torch's
+# BuildExtension auto-hipifies the .cu sources and hipcub/rocThrust ship in the base ROCm
+# image, so no CUB_HOME is needed. Built with --no-build-isolation so setup.py sees the
+# base ROCm torch (torch.version.hip). PIP_CONSTRAINT keeps the base torch/numpy pinned.
+# The build-time check only asserts the compiled _C extension exists (no GPU at build).
+ARG P3D_COMMIT=c8fcd83ff96fa0a5893c0b994f9285d7aa772540
+RUN PIP_CONSTRAINT=/opt/torch-constraints.txt pip install --no-cache-dir ninja fvcore iopath && \
+    git clone https://github.com/facebookresearch/pytorch3d /tmp/pytorch3d && \
+    git -C /tmp/pytorch3d checkout ${P3D_COMMIT} && \
+    ROCM_HOME=/opt/rocm ROCM_PATH=/opt/rocm PYTORCH_ROCM_ARCH=gfx1151 FORCE_CUDA=1 MAX_JOBS=8 \
+      PIP_CONSTRAINT=/opt/torch-constraints.txt \
+      pip install --no-cache-dir --no-build-isolation /tmp/pytorch3d && \
+    rm -rf /tmp/pytorch3d && \
+    python -c "import os, glob, pytorch3d; so=glob.glob(os.path.dirname(pytorch3d.__file__)+'/_C*.so'); assert so, 'pytorch3d _C extension not built'; print('pytorch3d', pytorch3d.__version__, 'gfx1151 _C:', os.path.basename(so[0]))"
+
 # De-vendored RoboTwin: clone upstream at the pinned commit into /opt/RoboTwin, then apply
 # the compatibility patch there. It bundles the ROCm changes (curobo->mplib, OIDN off,
 # optional open3d, expert seed pre-check off) with the model-agnostic eval-harness
@@ -60,7 +79,7 @@ RUN git clone https://github.com/RoboTwin-Platform/RoboTwin /opt/RoboTwin && \
 ENV PYTHONPATH=/opt/sim:/opt/RoboTwin
 COPY lib/ /opt/sim/
 
-RUN python -c "import torch, sapien, mplib.planner; from mplib.sapien_utils import SapienPlanner; import sim_robotwin; from sim_robotwin.policy import load_policy; assert torch.version.hip, torch.__version__; print('OK torch', torch.__version__, 'sapien', sapien.__version__, '| sim_robotwin imports cleanly')"
+RUN python -c "import torch, sapien, mplib.planner, pytorch3d; from mplib.sapien_utils import SapienPlanner; import sim_robotwin; from sim_robotwin.policy import load_policy; assert torch.version.hip, torch.__version__; print('OK torch', torch.__version__, 'sapien', sapien.__version__, 'pytorch3d', pytorch3d.__version__, '| sim_robotwin imports cleanly')"
 
 COPY test.py /ryzers/
 COPY scripts/ /ryzers/scripts/
