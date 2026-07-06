@@ -55,8 +55,15 @@ ryzers build libero vlajepa                                  # chain: simulation
 ryzers run /ryzers/demos/demo_closedloop_libero.sh           # batch rollouts -> success_summary.json
 SUITE=libero_goal NUM_TASKS=2 NUM_TRIALS=10 \
   ryzers run /ryzers/demos/demo_closedloop_libero.sh
-ryzers run /ryzers/demos/demo_interactive_libero.sh          # browser demo (http://localhost:8080)
+ryzers run /ryzers/demos/demo_interactive_libero.sh          # live browser demo (http://localhost:8080)
+ryzers run /ryzers/demos/demo_interactive_libero_rt.sh       # real-time demo, robot HOLDs while planning (:8081)
 ```
+
+Two live demos (both serve MJPEG + a control page over HTTP; use `ssh -L PORT:localhost:PORT`):
+`demo_interactive_libero.sh` runs the sim as fast as inference allows; `demo_interactive_libero_rt.sh`
+steps the sim at wall-clock `RT_HZ` (default 20) so the robot visibly pauses ("THINKING") while VLA-JEPA
+plans the next action chunk, exposing planner latency. Type an instruction (or use the scene's default) to
+run that task; each run also saves a rollout MP4 under `workspace/vlajepa/outputs/interactive[_rt]/`.
 
 Per-task result JSON + rollout MP4s and an aggregate `success_summary.json` land under
 `workspace/vlajepa/outputs/closedloop/<TAG>/<SUITE>/`. Preprocessing (180-deg image
@@ -82,8 +89,12 @@ rates are comparable to the reference deployment.
 - [x] ROCm environment + full-model smoke (capability 1).
 - [x] Open-loop replay on LeRobot/LIBERO episodes with GT-vs-pred plots (capability 2).
 - [x] Closed-loop LIBERO evaluation in MuJoCo via the `simulation/libero` base (capability 3).
+- [x] Live interactive demos (standard + real-time), served over HTTP/MJPEG.
 - [ ] LIBERO-Plus perturbation-dimension closed-loop eval.
 - [ ] SimplerEnv closed-loop (SAPIEN/Vulkan) — stretch.
+
+Closed-loop LIBERO success (10 trials/task, 10 tasks/suite, seed 1000, gfx1151):
+`object` 100/100, `spatial` 100/100, `goal` 97/100, `10 (long)` 100/100 — **397/400 (99.25%)**.
 
 ### References
 

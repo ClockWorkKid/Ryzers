@@ -96,7 +96,7 @@ COPY scripts/_hf_common.sh scripts/download.sh scripts/download_smoke.sh scripts
 # (ryzers build libero vlajepa): the adapter imports sim_libero, and the demos add it to
 # PYTHONPATH and set POLICY_FACTORY. On the plain base they are inert (unused) files.
 COPY adapters/ /opt/vlajepa-adapters/
-COPY demos/demo_closedloop_libero.sh demos/demo_interactive_libero.sh /ryzers/demos/
+COPY demos/demo_closedloop_libero.sh demos/demo_interactive_libero.sh demos/demo_interactive_libero_rt.sh /ryzers/demos/
 RUN chmod +x /ryzers/*.sh /ryzers/demos/*.sh
 
 # Default `ryzers run` (no CMD override) = lightweight env sign-of-life (no weights).
