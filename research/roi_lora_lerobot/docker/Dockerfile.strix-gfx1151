@@ -66,7 +66,15 @@ open(p, "w", encoding="utf-8").write(s.replace(OLD, NEW, 1))
 print("resume override patch applied")
 PY
 
-# Sanity: imports + the torch trio must stay ROCm; verify config knobs present.
+# Bake in ROI-guided pre-ViT (stage-D) vision-token pruning: overlay our modified
+# molmoact2 policy files (+ new roi_prune.py) onto the editable lerobot install.
+# Runtime no-op unless policy.roi_prune_enable=true (defaults keep the ViT intact).
+COPY roi_overlay/ /opt/lerobot/src/lerobot/policies/molmoact2/
+# COPY inherits build-context perms/owner (root); make the package world-readable
+# and traversable so the non-root training user can import it.
+RUN chmod -R a+rX /opt/lerobot/src/lerobot/policies/molmoact2
+
+# Sanity: imports + the torch trio must stay ROCm; verify config + ROI knobs.
 RUN python - <<'PY'
 import torch, lerobot, transformers, peft, datasets, av, numpy
 assert "+rocm" in torch.__version__ or torch.version.hip, f"torch not ROCm: {torch.__version__}"
@@ -75,5 +83,10 @@ print("lerobot", getattr(lerobot,"__version__","?"), "| transformers", transform
       "| peft", peft.__version__, "| datasets", datasets.__version__,
       "| av", av.__version__, "| numpy", numpy.__version__)
 from lerobot.policies.molmoact2.configuration_molmoact2 import MolmoAct2Config
-print("MolmoAct2Config OK; enable_lora_vlm default:", MolmoAct2Config().enable_lora_vlm)
+c = MolmoAct2Config()
+print("MolmoAct2Config OK; enable_lora_vlm default:", c.enable_lora_vlm)
+from lerobot.policies.molmoact2 import roi_prune as rp
+assert hasattr(c, "roi_prune_enable") and hasattr(c, "roi_prune_keep_frac")
+print("ROI baked in: roi_prune_select default:", c.roi_prune_select,
+      "| keep_frac:", c.roi_prune_keep_frac, "| module:", rp.__name__)
 PY
