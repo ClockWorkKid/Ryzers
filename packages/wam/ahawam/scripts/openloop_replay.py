@@ -1,23 +1,26 @@
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Open-loop replay eval for FastWAM on Strix Halo (gfx1151).
+"""Open-loop replay eval for AHA-WAM on Strix Halo (gfx1151).
 
-Feeds ground-truth observations from released LeRobot episodes into the model and
-compares the predicted action chunk against the dataset's ground-truth action chunk
-(in the model's normalized action space). Produces per-dimension GT-vs-prediction
-overlay plots (workspace rule 2.a) and error metrics.
+Feeds ground-truth observations from released RoboTwin 2.0 LeRobot episodes into the
+model and compares the predicted action horizon against the dataset's ground-truth
+actions (in the model's normalized action space). Produces per-dimension
+GT-vs-prediction overlay plots (workspace rule 2.a) and error metrics.
 
-Reuses the upstream `RobotVideoDataset` + `FastWAMProcessor` so the 2-cam/3-cam
-concat, resize/crop, [-1,1] normalization and action/state normalization match
-training exactly. The only override is the text-embedding cache, which is unused
-here because `infer_action` re-encodes the prompt string on the fly.
+AHA-WAM predicts one action *chunk* (action_chunk_size steps) per action-phase call,
+conditioned on a reusable video-context prefill (OVCR). To cover the full
+action_horizon open-loop, we prefill the video context once from the first frame,
+then roll `num_chunks = action_horizon // action_chunk_size` action chunks, feeding
+the ground-truth observation (image + proprio) at each chunk boundary -- exactly the
+two-phase schedule used by deploy/server/ahawam_policy, but driven from GT frames.
 
-Config-driven for both embodiments:
-  - LIBERO   : CONFIG_NAME=sim_libero   (2 cams, 224x448, action 7, min/max)
-  - RoboTwin : CONFIG_NAME=sim_robotwin (3 cams, 384x320, action 14, z-score)
+Reuses the upstream `RobotVideoDataset` + `AHAWAMProcessor` so the 3-cam concat,
+resize/crop, [-1,1] normalization and action/state normalization match training
+exactly. The only override is the text-embedding cache, which is unused here because
+`infer_action` re-encodes the prompt string on the fly.
 
-Env: FASTWAM_REPO, CONFIG_NAME, CKPT, DATASET_STATS, DATASET_DIR, NUM_EPISODES,
-     NUM_STEPS(20), OUT_DIR, TAG.
+Env: AHAWAM_REPO, CONFIG_NAME(sim_robotwin), CKPT, DATASET_STATS, DATASET_DIR,
+     NUM_EPISODES(6), NUM_PLOT_EPISODES(6), NUM_STEPS(10), OUT_DIR, TAG, SEED.
 """
 import os
 import sys
@@ -31,14 +34,14 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-FASTWAM_REPO = os.environ.get("FASTWAM_REPO", "/repos/fastwam")
-CONFIG_NAME = os.environ.get("CONFIG_NAME", "sim_libero")
+AHAWAM_REPO = os.environ.get("AHAWAM_REPO", "/repos/ahawam")
+CONFIG_NAME = os.environ.get("CONFIG_NAME", "sim_robotwin")
 CKPT = os.environ["CKPT"]
 DATASET_STATS = os.environ["DATASET_STATS"]
 DATASET_DIR = os.environ["DATASET_DIR"]
 NUM_EPISODES = int(os.environ.get("NUM_EPISODES") or "6")
 NUM_PLOT_EPISODES = int(os.environ.get("NUM_PLOT_EPISODES") or "6")
-NUM_STEPS = int(os.environ.get("NUM_STEPS") or "20")
+NUM_STEPS = int(os.environ.get("NUM_STEPS") or "10")
 OUT_DIR = os.environ.get("OUT_DIR", "/outputs")
 TAG = os.environ.get("TAG", CONFIG_NAME)
 SEED = int(os.environ.get("SEED") or "0")
@@ -55,21 +58,20 @@ def _compose_cfg():
         except Exception:
             pass
     GlobalHydra.instance().clear()
-    with initialize_config_dir(config_dir=os.path.join(FASTWAM_REPO, "configs"), version_base="1.3"):
+    with initialize_config_dir(config_dir=os.path.join(AHAWAM_REPO, "configs"), version_base="1.3"):
         return compose(config_name=CONFIG_NAME, overrides=[f"ckpt={CKPT}"])
 
 
 def _build_dataset(cfg):
     """Instantiate RobotVideoDataset over the downloaded episodes, eval mode."""
     from hydra.utils import instantiate
-    import fastwam.datasets.lerobot.robot_video_dataset as rvd
-    from fastwam.utils import misc
+    import ahawam.datasets.lerobot.robot_video_dataset as rvd
+    from ahawam.utils import misc
 
     # infer_action re-encodes the prompt, so the cached text context is unused: stub it.
     def _stub_text_context(self, prompt):
         return torch.zeros(self.context_len, 8), torch.ones(self.context_len, dtype=torch.bool)
     rvd.RobotVideoDataset._get_cached_text_context = _stub_text_context
-    # get_work_dir() is only used to save a stats copy; redirect to /tmp.
     try:
         misc.get_work_dir = lambda *a, **k: "/tmp"
     except Exception:
@@ -86,10 +88,9 @@ def _build_dataset(cfg):
     return ds
 
 
-def _aggregate_plots(out_dir, tag, n_ep, norm_mae_mat, raw_mae_mat, ep_mse, agg):
+def _aggregate_plots(out_dir, tag, n_ep, norm_mae_mat, ep_mse, agg):
     """Aggregate visualization graphs over all replayed episodes."""
     D = norm_mae_mat.shape[1]
-    # (1) per-dim normalized-MAE distribution across episodes (box) + mean bars.
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(max(6, 0.5 * D + 2), 7))
     ax1.boxplot([norm_mae_mat[:, d] for d in range(D)], showfliers=False)
     ax1.set_xticks(range(1, D + 1))
@@ -107,7 +108,6 @@ def _aggregate_plots(out_dir, tag, n_ep, norm_mae_mat, raw_mae_mat, ep_mse, agg)
     fig.savefig(os.path.join(out_dir, "agg_per_dim_mae.png"), dpi=100)
     plt.close(fig)
 
-    # (2) per-episode error distributions.
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4))
     ax1.hist(ep_mse, bins=min(30, max(5, n_ep // 3)), color="tab:blue", alpha=0.8)
     ax1.axvline(ep_mse.mean(), color="k", linestyle="--", label=f"mean={ep_mse.mean():.4f}")
@@ -129,21 +129,61 @@ def _aggregate_plots(out_dir, tag, n_ep, norm_mae_mat, raw_mae_mat, ep_mse, agg)
     plt.close(fig)
 
 
+def _rollout_horizon(model, video, proprio, prompt, action_horizon, chunk_size, freq_ratio):
+    """Two-phase open-loop rollout: one video-context prefill, then num_chunks action
+    chunks fed the GT observation (image + proprio) at each chunk boundary."""
+    num_chunks = action_horizon // chunk_size
+    input_image = video[:, 0].unsqueeze(0).to("cuda", dtype=model.torch_dtype)
+
+    if hasattr(model, "reset_history"):
+        model.reset_history()
+    if hasattr(model, "_inference_state"):
+        model._inference_state = None
+
+    with torch.no_grad():
+        model.infer_action(
+            prompt=prompt, input_image=input_image, action_horizon=action_horizon,
+            negative_prompt="", text_cfg_scale=1.0, seed=SEED, rand_device="cpu",
+            tiled=False, phase="video", num_inference_steps=NUM_STEPS,
+        )
+        preds = []
+        n_video = video.shape[1]
+        for c in range(num_chunks):
+            vf = min((c * chunk_size) // freq_ratio, n_video - 1)
+            obs_image = video[:, vf].unsqueeze(0).to("cuda", dtype=model.torch_dtype)
+            obs_proprio = proprio[c * chunk_size].unsqueeze(0).to("cuda", dtype=torch.float32)
+            out = model.infer_action(
+                chunk_obs_image=obs_image, chunk_proprio=obs_proprio,
+                sigma_shift=None, tiled=False, phase="action", num_inference_steps=NUM_STEPS,
+            )
+            chunk = out["action_chunk"]
+            if chunk.ndim == 3:
+                chunk = chunk[0]
+            preds.append(chunk.float().cpu().numpy())
+    return np.concatenate(preds, axis=0)  # [num_chunks*chunk_size, D]
+
+
 def main() -> int:
     print(f"torch {torch.__version__}  device={torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu'}")
     print(f"config={CONFIG_NAME}  ckpt={os.path.basename(CKPT)}  dataset_dir={DATASET_DIR}")
 
-    if FASTWAM_REPO not in sys.path:
-        sys.path.insert(0, FASTWAM_REPO)
+    if AHAWAM_REPO not in sys.path:
+        sys.path.insert(0, AHAWAM_REPO)
     from hydra.utils import instantiate
+    from omegaconf import OmegaConf
     cfg = _compose_cfg()
-    action_horizon = int(cfg.data.train.num_frames) - 1
+    action_horizon = int(cfg.model.action_horizon)
+    freq_ratio = int(cfg.data.train.action_video_freq_ratio)
 
     t0 = time.time()
-    model = instantiate(cfg.model, model_dtype=torch.bfloat16, device="cuda")
+    model_cfg = OmegaConf.create(OmegaConf.to_container(cfg.model, resolve=True))
+    model_cfg.load_text_encoder = True
+    model = instantiate(model_cfg, model_dtype=torch.bfloat16, device="cuda")
     model.load_checkpoint(str(CKPT))
     model = model.to("cuda").eval()
-    print(f"model loaded: {time.time()-t0:.1f}s  proprio_dim={model.proprio_dim}")
+    chunk_size = int(model.action_chunk_size)
+    print(f"model loaded: {time.time()-t0:.1f}s  proprio_dim={model.proprio_dim}  "
+          f"action_horizon={action_horizon}  chunk_size={chunk_size}")
 
     ds = _build_dataset(cfg)
     processor = ds.lerobot_dataset.processor
@@ -157,43 +197,33 @@ def main() -> int:
 
     per_ep = []
     all_norm_mae = []
-    all_raw_mae = []
     for k in range(n_ep):
         idx = int(starts[k])
         sample = ds[idx]
-        video = sample["video"]                        # [C, T_video, H, W] in [-1,1]
-        input_image = video[:, 0].unsqueeze(0).to("cuda", dtype=model.torch_dtype)
-        proprio = sample["proprio"][0:1].to("cuda", dtype=model.torch_dtype)  # [1, proprio_dim]
-        gt = sample["action"].float().cpu().numpy()    # [T, D] normalized
+        video = sample["video"]                      # [C, T_video, H, W] in [-1,1]
+        proprio = sample["proprio"]                  # [T-1, proprio_dim] normalized
+        gt = sample["action"].float().cpu().numpy()  # [T-1, D] normalized
         prompt = sample["prompt"]
 
         t1 = time.time()
-        with torch.no_grad():
-            pred = model.infer_action(prompt=prompt, input_image=input_image,
-                                      action_horizon=action_horizon, proprio=proprio,
-                                      num_inference_steps=NUM_STEPS, seed=SEED, rand_device="cpu")
+        pr = _rollout_horizon(model, video, proprio, prompt, action_horizon, chunk_size, freq_ratio)
         latency = time.time() - t1
-        pr = pred["action"].float().cpu().numpy()       # [T, D] normalized
         T = min(gt.shape[0], pr.shape[0])
         gt, pr = gt[:T], pr[:T]
 
-        norm_mae_dim = np.abs(pr - gt).mean(axis=0)      # [D]
+        norm_mae_dim = np.abs(pr - gt).mean(axis=0)
         norm_mse = float(((pr - gt) ** 2).mean())
-        # raw-unit MAE via inverse normalization
         gt_raw = action_norm.backward(torch.tensor(gt)).numpy()
         pr_raw = action_norm.backward(torch.tensor(pr)).numpy()
         raw_mae_dim = np.abs(pr_raw - gt_raw).mean(axis=0)
         all_norm_mae.append(norm_mae_dim)
-        all_raw_mae.append(raw_mae_dim)
         per_ep.append({"episode": k, "frame_idx": idx, "norm_mse": norm_mse,
                        "norm_mae_mean": float(norm_mae_dim.mean()),
                        "raw_mae_mean": float(raw_mae_dim.mean()),
                        "latency_s": round(latency, 3), "prompt": prompt[:80]})
-        if k < 10 or k % 10 == 0:
-            print(f"ep{k:03d} idx={idx:7d}  normMSE={norm_mse:.4f}  normMAE={norm_mae_dim.mean():.4f}  "
-                  f"rawMAE={raw_mae_dim.mean():.4f}  {latency:.2f}s")
+        print(f"ep{k:03d} idx={idx:7d}  normMSE={norm_mse:.4f}  normMAE={norm_mae_dim.mean():.4f}  "
+              f"rawMAE={raw_mae_dim.mean():.4f}  {latency:.2f}s")
 
-        # Per-dim GT vs prediction overlay for the first few episodes (rule 2.a: overlay on same axes).
         if k >= NUM_PLOT_EPISODES:
             continue
         D = gt.shape[1]
@@ -217,15 +247,14 @@ def main() -> int:
         fig.savefig(os.path.join(out_dir, f"ep{k:02d}.png"), dpi=90)
         plt.close(fig)
 
-    norm_mae_mat = np.stack(all_norm_mae, axis=0)   # [N, D]
-    raw_mae_mat = np.stack(all_raw_mae, axis=0)      # [N, D]
+    norm_mae_mat = np.stack(all_norm_mae, axis=0)
     ep_mse = np.array([e["norm_mse"] for e in per_ep])
-    D = norm_mae_mat.shape[1]
     agg = norm_mae_mat.mean(axis=0)
-    _aggregate_plots(out_dir, TAG, n_ep, norm_mae_mat, raw_mae_mat, ep_mse, agg)
+    _aggregate_plots(out_dir, TAG, n_ep, norm_mae_mat, ep_mse, agg)
     summary = {
         "tag": TAG, "config": CONFIG_NAME, "num_episodes": n_ep,
         "num_inference_steps": NUM_STEPS, "action_dim": int(agg.shape[0]),
+        "action_horizon": action_horizon, "action_chunk_size": chunk_size,
         "mean_norm_mae_per_dim": [round(float(v), 4) for v in agg],
         "mean_norm_mae": round(float(agg.mean()), 4),
         "mean_norm_mse": round(float(np.mean([e["norm_mse"] for e in per_ep])), 4),
