@@ -2,27 +2,29 @@
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
-# Fetch the released FastWAM checkpoints + dataset stats (yuanty/fastwam) into the
-# mounted model volume. LIBERO (~12 GB) and/or RoboTwin (~12 GB). The Wan2.2 base
-# is fetched separately by the upstream loader on first model run.
-#   ryzers run /ryzers/scripts/download_checkpoints.sh [libero|robotwin|all]
+# Fetch the released AHA-WAM RoboTwin 2.0 checkpoints + dataset stats
+# (SereneC/AHA-WAM-RoboTwin2.0) into the mounted model volume. AHA-WAM only ships
+# RoboTwin2.0 weights (no LIBERO checkpoint). The Wan2.2 base is fetched separately
+# by the upstream DiffSynth loader on the first model run (DIFFSYNTH_MODEL_BASE_PATH).
+#   ryzers run /ryzers/scripts/download_checkpoints.sh [robotwin|flash|all]
+#     robotwin -> robotwin_ahawam.pt        (AHA-WAM, ~24 Hz path)
+#     flash    -> robotwin_ahawam-flash.pt  (ODE-distilled AHA-WAM-Flash, ~57 Hz path)
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 source "${HF_COMMON:-$HERE/_hf_common.sh}"
 
-WHICH="${1:-all}"
-DEST="${FASTWAM_RELEASE_DIR:-/models/fastwam_release}"
+WHICH="${1:-robotwin}"
+DEST="${AHAWAM_RELEASE_DIR:-/models/ahawam_release}"
 mkdir -p "$DEST"
 
-files=()
+files=(dataset_stats.json)
 case "$WHICH" in
-  libero)   files=(libero_uncond_2cam224.pt libero_uncond_2cam224_dataset_stats.json) ;;
-  robotwin) files=(robotwin_uncond_3cam_384.pt robotwin_uncond_3cam_384_dataset_stats.json) ;;
-  all)      files=(libero_uncond_2cam224.pt libero_uncond_2cam224_dataset_stats.json
-                   robotwin_uncond_3cam_384.pt robotwin_uncond_3cam_384_dataset_stats.json) ;;
-  *) echo "usage: download_checkpoints.sh [libero|robotwin|all]" >&2; exit 2 ;;
+  robotwin) files+=(robotwin_ahawam.pt) ;;
+  flash)    files+=(robotwin_ahawam-flash.pt) ;;
+  all)      files+=(robotwin_ahawam.pt robotwin_ahawam-flash.pt) ;;
+  *) echo "usage: download_checkpoints.sh [robotwin|flash|all]" >&2; exit 2 ;;
 esac
 
-hf_prefetch yuanty/fastwam "${files[@]}" --local-dir "$DEST"
-echo "PASS: FastWAM checkpoints ($WHICH) cached under $DEST"
+hf_prefetch SereneC/AHA-WAM-RoboTwin2.0 "${files[@]}" --local-dir "$DEST"
+echo "PASS: AHA-WAM checkpoints ($WHICH) cached under $DEST"
 ls -la "$DEST"

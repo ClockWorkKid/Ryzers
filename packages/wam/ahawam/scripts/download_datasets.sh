@@ -2,26 +2,18 @@
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
-# Fetch the preprocessed LeRobot datasets used by the open-loop / video-imagination
-# demos into the mounted model volume. Sources:
-#   LIBERO   : yuanty/LIBERO-fastwam       (4x tar.gz)
+# Fetch the preprocessed LeRobot RoboTwin 2.0 dataset used by the open-loop /
+# video-imagination demos into the mounted model volume:
 #   RoboTwin : yuanty/robotwin2.0-fastwam  (split archives, concatenated)
-#   ryzers run /ryzers/scripts/download_datasets.sh [libero|robotwin|all]
+# (AHA-WAM is trained/evaluated on RoboTwin 2.0; there is no LIBERO checkpoint.)
+#   ryzers run /ryzers/scripts/download_datasets.sh [robotwin]
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 source "${HF_COMMON:-$HERE/_hf_common.sh}"
 
-WHICH="${1:-libero}"
-DATA="${FASTWAM_DATA_DIR:-/models/data}"
+WHICH="${1:-robotwin}"
+DATA="${AHAWAM_DATA_DIR:-/models/data}"
 mkdir -p "$DATA"
-
-fetch_libero() {
-  local tmp="$DATA/.dl_libero"; mkdir -p "$tmp"
-  hf_prefetch datasets/yuanty/LIBERO-fastwam --repo-type dataset --local-dir "$tmp"
-  for f in "$tmp"/*.tar.gz; do echo "extract $(basename "$f")"; tar -xzf "$f" -C "$DATA"; done
-  rm -rf "$tmp"
-  echo "PASS: LIBERO dataset under $DATA (libero_*_no_noops_lerobot)"
-}
 
 fetch_robotwin() {
   local tmp="$DATA/.dl_robotwin"; mkdir -p "$tmp"
@@ -38,9 +30,7 @@ fetch_robotwin() {
 }
 
 case "$WHICH" in
-  libero)   fetch_libero ;;
-  robotwin) fetch_robotwin ;;
-  all)      fetch_libero; fetch_robotwin ;;
-  *) echo "usage: download_datasets.sh [libero|robotwin|all]" >&2; exit 2 ;;
+  robotwin|all) fetch_robotwin ;;
+  *) echo "usage: download_datasets.sh [robotwin]" >&2; exit 2 ;;
 esac
 ls -la "$DATA"

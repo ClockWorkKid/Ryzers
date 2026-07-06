@@ -5,7 +5,7 @@
 # Shared HF pre-fetch helper for the download_*.sh scripts. Source it, then call
 # `hf_prefetch <repo> [files...] [--local-dir DIR]`.
 #
-# FastWAM pins huggingface-hub==0.29.2, whose CLI is `huggingface-cli` (not the
+# AHA-WAM pins huggingface-hub==0.29.2, whose CLI is `huggingface-cli` (not the
 # newer `hf`). Defaults to a single stream + Xet client off for reliable anonymous
 # downloads, and retries so a dropped connection resumes from cache. Set
 # HF_HUB_ENABLE_HF_TRANSFER=1 for parallel speed where permits/auth allow.
