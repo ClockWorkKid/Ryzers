@@ -2,22 +2,26 @@
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
-# Steady-state latency breakdown of one infer_action (text encoder / VAE / world
-# prefill / flow-matching plan) and an SDPA attention-backend comparison.
-#   ryzers run /ryzers/demos/demo_latency.sh
-#   DATASET=robotwin ryzers run /ryzers/demos/demo_latency.sh
+# Two-phase latency breakdown for AHA-WAM: slow video-context prefill (planner) vs
+# fast action-chunk executor (control Hz), plus an SDPA attention-backend comparison.
+# This quantifies why the async runtime decouples the branches.
+#   ryzers run /ryzers/demos/demo_latency.sh                    # AHA-WAM-Flash (1-step)
+#   WHICH=robotwin NUM_STEPS=10 ryzers run /ryzers/demos/demo_latency.sh   # base AHA-WAM
 set -euo pipefail
-DATASET="${DATASET:-libero}"
-REL=/models/fastwam_release
-export FASTWAM_REPO=/repos/fastwam
-export PYTHONPATH="/repos/fastwam/src:/repos/fastwam:${PYTHONPATH:-}"
-
-case "$DATASET" in
-  libero)   export CONFIG_NAME=sim_libero   CKPT=$REL/libero_uncond_2cam224.pt ;;
-  robotwin) export CONFIG_NAME=sim_robotwin CKPT=$REL/robotwin_uncond_3cam_384.pt ;;
-  *) echo "DATASET must be libero|robotwin" >&2; exit 2 ;;
+REL=/models/ahawam_release
+WHICH="${WHICH:-flash}"
+case "$WHICH" in
+  flash)    CKPT="${CKPT:-$REL/robotwin_ahawam-flash.pt}"; DEF_STEPS=1 ;;
+  robotwin) CKPT="${CKPT:-$REL/robotwin_ahawam.pt}";       DEF_STEPS=10 ;;
+  *) echo "WHICH must be flash|robotwin" >&2; exit 2 ;;
 esac
+export AHAWAM_REPO=/repos/ahawam
+export CONFIG_NAME="${CONFIG_NAME:-sim_robotwin}"
 export CKPT
-[ -f "$CKPT" ] || { echo "missing $CKPT -> run scripts/download_checkpoints.sh $DATASET" >&2; exit 1; }
+export NUM_STEPS="${NUM_STEPS:-$DEF_STEPS}"
+export PYTHONPATH="/repos/ahawam/src:/repos/ahawam:${PYTHONPATH:-}"
+
+bash /ryzers/scripts/download_checkpoints.sh "$WHICH"
+[ -f "$CKPT" ] || { echo "missing $CKPT -> run scripts/download_checkpoints.sh $WHICH" >&2; exit 1; }
 
 exec python /ryzers/scripts/planning_bench.py
