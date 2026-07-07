@@ -27,8 +27,16 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends git cmake build-essential ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
+# Strix Halo efficiency patch on top of the pinned upstream commit: batches the ~90 tiny
+# per-layer KV-editor GEMMs into a handful of stacked GEMMs (mot.py) and caches the static
+# instruction text embedding across video prefills (deploy servers + the RoboTwin plugin) so
+# umt5 only runs when the instruction changes. Both are lossless (bf16-equivalent) and default
+# on (AHAWAM_KV_EDITOR_FAST=1 / AHAWAM_CACHE_TEXT_CONTEXT=1). Generated against ${AHAWAM_COMMIT}.
+COPY patches/ /ryzers/patches/
 RUN git clone https://github.com/serene-sivy/AHA-WAM /repos/ahawam && \
-    git -C /repos/ahawam checkout ${AHAWAM_COMMIT}
+    git -C /repos/ahawam checkout ${AHAWAM_COMMIT} && \
+    git -C /repos/ahawam apply --whitespace=nowarn /ryzers/patches/ahawam_opt.patch && \
+    echo "applied ahawam_opt.patch @ ${AHAWAM_COMMIT:0:8}"
 
 # ROCm port: strip the CUDA torch/torchvision/torchcodec pins (keep base ROCm torch) and
 # relax upstream's requires-python <3.11 so it installs on the base image's Python. Pin only
@@ -45,6 +53,13 @@ RUN python /ryzers/scripts/strip_cuda_torch.py /repos/ahawam/pyproject.toml && \
     pip freeze | grep -iE "^(torch|torchvision|torchcodec|numpy)==" > /opt/ahawam-constraints.txt && \
     PIP_CONSTRAINT=/opt/ahawam-constraints.txt pip install --no-cache-dir \
       "hf-transfer>=0.1.8" "sentencepiece>=0.2" "matplotlib>=3.8" "opencv-python-headless"
+
+# Sim Policy adapter (sim_robotwin.Policy wrapping the AHA-WAM RoboTwin deploy plugin). Only
+# imported when driving the simulation/robotwin base via
+# POLICY_FACTORY=ahawam_robotwin_policy:build_policy; harmless (unused) on the plain base. On
+# its own dir so the interactive demos add it to PYTHONPATH. The RoboTwin closed-loop instead
+# uses the repo's own experiments/robotwin/ahawam_policy plugin via RoboTwin's eval_policy.py.
+COPY adapters/ /opt/ahawam-adapters/
 
 RUN python -c "import torch; assert torch.version.hip, 'torch is not a ROCm build: '+torch.__version__; import ahawam; from ahawam.runtime import create_ahawam; print('OK ahawam on torch', torch.__version__, 'hip', torch.version.hip)"
 

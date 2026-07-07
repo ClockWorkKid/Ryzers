@@ -49,6 +49,16 @@ environment_variables:
 - 'TASK=${TASK:-}'
 - 'TASKS=${TASKS:-}'
 - 'TASK_CONFIG=${TASK_CONFIG:-}'
+# Interactive / real-time RoboTwin demo knobs (require the simulation/robotwin base).
+- 'POLICY_FACTORY=${POLICY_FACTORY:-}'
+- 'MAX_STEPS=${MAX_STEPS:-}'
+- 'VIEW_RES=${VIEW_RES:-}'
+- 'VIDEO_RES=${VIDEO_RES:-}'
+- 'REPLAN_STEPS=${REPLAN_STEPS:-}'
+- 'ACTION_HORIZON=${ACTION_HORIZON:-}'
+# Efficiency toggles for the Strix-Halo patch (both default on; set 0 to disable).
+- 'AHAWAM_KV_EDITOR_FAST=${AHAWAM_KV_EDITOR_FAST:-}'
+- 'AHAWAM_CACHE_TEXT_CONTEXT=${AHAWAM_CACHE_TEXT_CONTEXT:-}'
 
 volume_mappings:
 - "$PWD/workspace/ahawam/outputs:/outputs"

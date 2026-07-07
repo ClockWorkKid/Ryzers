@@ -17,7 +17,15 @@ It is a **slim policy/model layer that ships no simulator**, and the reference c
 the simulator packages' `Policy` seam. It composes on:
 
 - the plain ROCm base &rarr; non-sim demos (smoke / latency / open-loop);
-- the `simulation/robotwin` base &rarr; closed-loop RoboTwin 2.0.
+- the `simulation/robotwin` base &rarr; closed-loop **and** interactive / real-time RoboTwin 2.0.
+
+**Strix-Halo efficiency patch.** On top of the pinned upstream commit the build applies
+`patches/ahawam_opt.patch` (two lossless, bf16-equivalent, default-on optimizations):
+(1) the per-layer chunk **KV-editor** collapses its ~90 tiny 16&times;16 GEMMs into a handful of
+stacked batched GEMMs (`models/wan22/mot.py`), and (2) the static instruction **text embedding
+is cached** across video prefills so umt5 only re-encodes when the instruction changes (both
+deploy servers + the RoboTwin plugin). Disable with `AHAWAM_KV_EDITOR_FAST=0` /
+`AHAWAM_CACHE_TEXT_CONTEXT=0`.
 
 The AHA-WAM install is pinned to the base image's torch + numpy, so the same policy layer
 composes on a plain base (numpy 2.x) or the `simulation/robotwin` base (numpy 1.26.4).
@@ -53,18 +61,27 @@ ryzers run --name ahawam /ryzers/scripts/download_datasets.sh          # open-lo
 | `demos/demo_openloop.sh` | plain | Replay GT RoboTwin episodes, overlay predicted vs GT action chunks + MAE. |
 | `demos/demo_async_rt.sh` | plain | Async real-time serving: upstream `deploy/` TCP server (`--async-mode`) + async dummy client. |
 | `demos/demo_closedloop_robotwin.sh` | `robotwin` | Closed-loop RoboTwin 2.0 rollouts (SAPIEN Vulkan RT) + success rate + videos. |
+| `demos/demo_interactive_robotwin.sh` | `robotwin` | Interactive RoboTwin (chunk-replay), live 4-view MJPEG in the browser; press Run to re-seed + roll a task. |
+| `demos/demo_interactive_robotwin_rt.sh` | `robotwin` | Real-time interactive RoboTwin: execution decoupled from planning so the arms **HOLD (THINKING)** while the two-phase model plans. |
 
 ```sh
 ryzers run --name ahawam /ryzers/demos/demo_smoke.sh
 ryzers run --name ahawam /ryzers/demos/demo_async_rt.sh                 # WHICH=flash (default)
 TASKS="click_bell lift_pot" NUM_EPISODES=10 \
   ryzers run --name ahawam-robotwin /ryzers/demos/demo_closedloop_robotwin.sh
+# Interactive (view at http://localhost:8082, ssh -L 8082:localhost:8082 <host>):
+ryzers run --name ahawam-robotwin /ryzers/demos/demo_interactive_robotwin.sh
+ryzers run --name ahawam-robotwin /ryzers/demos/demo_interactive_robotwin_rt.sh   # real-time, PORT 8083
 ```
 
 The RoboTwin closed-loop runs RoboTwin's own `script/eval_policy.py` against the upstream
 `experiments/robotwin/ahawam_policy` plugin (`EVALUATION.robotwin_root=/opt/RoboTwin`),
 scheduling the two phases via `EVALUATION.chunks_per_video_prefill`. The async real-time
-demo reuses the upstream `deploy/` stack unchanged (server + async dummy client).
+demo reuses the upstream `deploy/` stack unchanged (server + async dummy client). The
+interactive / real-time demos drive the model-agnostic `sim_robotwin.Policy` seam via
+`adapters/ahawam_robotwin_policy.py` (`POLICY_FACTORY=ahawam_robotwin_policy:build_policy`),
+which wraps the same validated RoboTwin deploy plugin so interactive rollouts match the
+closed-loop numbers. They default to **AHA-WAM-Flash** (1 diffusion step) for responsiveness.
 
 ### Results (Strix Halo, Radeon 8060S, gfx1151, ROCm 7.2.2)
 
@@ -73,18 +90,27 @@ demo reuses the upstream `deploy/` stack unchanged (server + async dummy client)
 - **Open-loop replay** — predicted action chunks track ground truth: mean normalized MAE
   **0.0094**, raw-unit MAE **0.0060** (per-dim overlays confirm tight tracking on the
   large-motion arm joints).
-- **Closed-loop RoboTwin 2.0** — `click_bell` **2/2 = 100%** with rendered rollout videos.
+- **Closed-loop RoboTwin 2.0** — `click_bell` **2/2 = 100%** with rendered rollout videos;
+  re-verified **1/1** with the optimized AHA-WAM-Flash build.
+- **Interactive / real-time RoboTwin** — the `sim_robotwin.Policy` adapter drives both the
+  chunk-replay and real-time (decoupled planner/exec, HOLD-while-thinking) demos; the
+  `click_bell` interactive rollout completes the task with live 4-view MJPEG + saved MP4.
+- **Batched KV editor (opt #1)** — collapsing the per-layer chunk KV-editor's ~90 tiny GEMMs
+  into stacked batched GEMMs cuts the action-chunk executor **407 &rarr; 153 ms/chunk (2.66&times;)**,
+  lifting executor throughput **39.3 &rarr; 104.6 control Hz** (AHA-WAM-Flash, 1 step).
 - **Async real-time** — Flash (`num_inference_steps=1`) async serving: 30/30 action
-  requests, 0 errors, 648 image frames pushed concurrently on the decoupled channel.
-  Two-phase latency: video prefill **407 ms** (amortized in background), action chunk
-  **405 ms** &rarr; **~39.5 control Hz** executor throughput.
+  requests, 0 errors, 648 image frames pushed concurrently on the decoupled channel. The
+  text-embed cache (opt #3) removes the ~160 ms umt5 re-encode from each background video
+  prefill (lossless; instruction is constant within a task).
 
 ### Useful knobs
 
 - Non-sim: `WHICH=flash|robotwin` (async/latency), `NUM_STEPS`, `SEED`, `NUM_EPISODES`.
 - Async RT: `PORT`, `INSTRUCTION`, `NUM_ACTION_REQUESTS`, `ACTION_RATE`, `IMAGE_FPS`, `PREFILL_WAIT`.
 - Closed-loop RoboTwin: `TASKS`, `TASK_CONFIG`, `NUM_EPISODES`, `CHUNKS_PER_VIDEO_PREFILL`, `NUM_INFERENCE_STEPS`.
+- Interactive RoboTwin: `TASK`, `TASK_CONFIG`, `SEED`, `PORT`, `MAX_STEPS`, `VIEW_RES`, `VIDEO_RES`, `NUM_INFERENCE_STEPS`, `CHUNKS_PER_VIDEO_PREFILL`.
 - `CKPT`, `DATASET_STATS` to point at specific weights; `HF_TOKEN` for faster/gated downloads.
+- Efficiency toggles: `AHAWAM_KV_EDITOR_FAST` (batched KV editor, default 1), `AHAWAM_CACHE_TEXT_CONTEXT` (text-embed cache, default 1).
 
 ### References
 
