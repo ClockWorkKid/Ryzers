@@ -30,6 +30,14 @@ RUN apt-get update && \
 RUN git clone https://github.com/yuantianyuan01/FastWAM /repos/fastwam && \
     git -C /repos/fastwam checkout ${FASTWAM_COMMIT}
 
+# Exact inference-time caches for the planning path (bit-identical output, ~1.45x faster on
+# gfx1151): (1) memoize the UMT5-XXL text encode across a replan episode, (2) cache the action
+# cross-attention K/V + text-embedding across a plan's diffusion steps. Shipped as a reviewable
+# diff against the pinned upstream commit (upstream caches only video self-attn K/V). Default-on
+# at runtime; disable with FASTWAM_TEXT_KV_CACHE=0. See docs/RESEARCH_FINDINGS.md.
+COPY patches/fastwam_kv_cache.patch /tmp/fastwam_kv_cache.patch
+RUN git -C /repos/fastwam apply --verbose /tmp/fastwam_kv_cache.patch
+
 # Pin the base's torch + numpy so the FastWAM install (and its extras) never replaces
 # them. This is what lets one Dockerfile compose on the plain ROCm base (numpy 2.x) and
 # on a simulator base (numpy 1.26.4) identically.

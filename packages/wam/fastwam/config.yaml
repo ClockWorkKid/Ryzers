@@ -24,6 +24,9 @@ environment_variables:
 - "TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1"
 - "TORCH_BLAS_PREFER_HIPBLASLT=0"
 - "OUT_DIR=/outputs"
+# Exact planning-path caches (bit-identical output, ~1.45x faster). Default-on; set to 0 to
+# restore upstream behavior for debugging/parity checks.
+- 'FASTWAM_TEXT_KV_CACHE=${FASTWAM_TEXT_KV_CACHE:-1}'
 # Per-demo knobs (override from the host: VAR=... ryzers run /ryzers/demos/demo_*.sh).
 - 'HF_TOKEN=${HF_TOKEN:-}'
 - 'NUM_STEPS=${NUM_STEPS:-}'
