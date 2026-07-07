@@ -5,11 +5,13 @@
 # prefill actually shrinks (ROI_PRUNE_DEBUG prints "seq S->S_new"), and (4) the
 # loss (flow + distill) is finite. NOT a convergence run.
 set -u
-CACHE=/shared_nobackup/user/molmoact2/hf_cache
-OUT=/shared_nobackup/user/molmoact2/outputs
-OV=$HOME/roi_lerobot_overlay
+# Env-overridable paths: set WORK to the node's shared/scratch filesystem (or set CACHE/OUT).
+WORK="${WORK:-$HOME/molmoact2}"
+CACHE="${CACHE:-$WORK/hf_cache}"
+OUT="${OUT:-$WORK/outputs}"
+OV="${OV:-$HOME/roi_lerobot_overlay}"
 MP=/opt/lerobot/src/lerobot/policies/molmoact2
-IMG=molmoact2-lerobot-train:rocm942
+IMG="${IMG:-molmoact2-lerobot-train:rocm942}"
 KEEP="${ROI_KEEP:-0.25}"
 GPU="${GPU:-0}"
 PORT="${PORT:-29761}"
@@ -34,7 +36,7 @@ docker run --rm \
   --user "$(id -u):$(id -g)" \
   --device=/dev/kfd --device=/dev/dri --group-add video --group-add render \
   --ipc=host --shm-size=64g --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
-  -e USER=user -e LOGNAME=user \
+  -e USER="$(id -un)" -e LOGNAME="$(id -un)" \
   -e HOME=/cache -e HF_HOME=/cache -e XDG_CACHE_HOME=/cache \
   -e HF_HUB_DOWNLOAD_TIMEOUT=120 -e TORCH_BLAS_PREFER_HIPBLASLT=0 \
   -e PYTORCH_ALLOC_CONF=expandable_segments:True \

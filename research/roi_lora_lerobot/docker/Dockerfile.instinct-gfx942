@@ -1,5 +1,5 @@
 # MolmoAct2 + LeRobot LoRA training image — AMD Instinct MI300X (gfx942).
-# Validated on the Instinct cluster (gpu-node): builds clean, 10-step LoRA-VLM
+# Validated on an AMD Instinct MI300X (gfx942) node: builds clean, 10-step LoRA-VLM
 # smoke passes end-to-end (rc=0, ckpt saved).
 #
 # Base: official ROCm 7.2 / py3.12 / torch 2.10 (multi-arch, includes gfx942).

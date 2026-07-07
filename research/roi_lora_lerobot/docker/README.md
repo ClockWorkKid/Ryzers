@@ -7,7 +7,7 @@ LoRA-VLM fine-tune on LIBERO, `rc=0`).
 
 | File | Target | Base image | GPU arch |
 | --- | --- | --- | --- |
-| `Dockerfile.instinct-gfx942` | AMD Instinct MI300X (Instinct cluster) | `rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.10.0` | gfx942 |
+| `Dockerfile.instinct-gfx942` | AMD Instinct MI300X | `rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.10.0` | gfx942 |
 | `Dockerfile.strix-gfx1151` | AMD Strix Halo APU (dev box) | `ryzer_env:latest` (Ryzers ROCm 7.2 / torch 2.10) | gfx1151 |
 
 ## Why these choices

@@ -71,27 +71,26 @@ KEEPS="025 050 075" N_EP=10 NGPU=8 WPG=2 \
 `WPG=3` is likely safe too (96 cores / 24 workers = 4 cores each); scale until CPU
 render becomes the limit.
 
-## 4. Alternative — Alola graphics GPUs (analyzed, NOT adopted)
-Per `CLUSTER_ACCESS_GUIDE.md`, Alola has **graphics-capable** GPUs where EGL *does*
-work: Radeon PRO **W7900** (gfx1100, 48 GB, `radeonsi` present, docker + 98T
-`/projects` + 171T `/scratch`), Strix-Halo (gfx1151), RDNA4 (gfx1200). Probed
-`mlse-alola-b38-ws2` (W7900) — graphics driver present, so GPU EGL rendering is
-viable there, unlike MI300X.
+## 4. Alternative — graphics-capable GPUs (analyzed, NOT adopted)
+Some AMD GPUs are graphics-capable and EGL *does* work on them: Radeon PRO
+**W7900** (gfx1100, 48 GB, `radeonsi` present), Strix-Halo (gfx1151), RDNA4
+(gfx1200). On a probed W7900 workstation the graphics driver is present, so GPU
+EGL rendering is viable there, unlike MI300X.
 
-**Why we stay on the MI300X cluster anyway (for this workload):**
+**Why we stay on MI300X anyway (for this workload):**
 - **Throughput, not render, is the goal.** Render is only *part* of episode time;
   the 6B policy is the rest, and a W7900 (RDNA3 workstation) is materially slower
   at 6B transformer inference than MI300X. GPU-fast rendering is offset by slower
   inference → no net per-rollout win.
-- **Parallelism:** the MI300X cluster = 8× MI300X/node (×WPG); Alola graphics nodes are 1–4
-  GPUs each → far less aggregate throughput for a 1500-rollout sweep.
-- **Migration cost:** Alola is a different **site** (Markham; storage not synced),
-  needs a **gfx1100 ROCm rebuild** of the eval image (ours is gfx942) and a ~24 GB
-  weight transfer. High effort, worse throughput.
+- **Parallelism:** an MI300X node = 8× MI300X (×WPG); the graphics workstations are
+  1–4 GPUs each → far less aggregate throughput for a 1500-rollout sweep.
+- **Migration cost:** a different site (storage not synced) needs a **gfx1100 ROCm
+  rebuild** of the eval image (ours is gfx942) and a ~24 GB weight transfer. High
+  effort, worse throughput.
 
-Keep Alola as the fallback if a *rendering-heavy, low-inference* eval ever needs
-true GPU rasterization; a `Dockerfile.strix-gfx1151` base already exists in the
-repo to seed that path.
+Keep the graphics-GPU path as the fallback if a *rendering-heavy, low-inference*
+eval ever needs true GPU rasterization; a `Dockerfile.strix-gfx1151` base already
+exists in the repo to seed that path.
 
 ## 5. Reproduce
 ```bash
