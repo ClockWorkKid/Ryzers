@@ -81,13 +81,14 @@ Future: extend the text cross-attn K/V cache to `infer_joint` (full-video) too.
   on): max |Δaction| = 0.0, 883.5 → 611.3 ms (**1.445x**). RoboTwin closed-loop + interactive
   now cache by default.
 - `fastwam-libero` (on `sim-libero`): rebuilt OK, patch verified in image.
-- `fastwam` (plain, on `ryzer_env`/rocm base): **build blocked by a PRE-EXISTING issue unrelated
-  to caching** — upstream `pyproject` pins `numpy==1.26.4` while the plain base ships `numpy 2.4.4`
-  → `ResolutionImpossible`. Sim bases already use numpy 1.26.4 so they are unaffected.
-  `strip_cuda_torch.py` intentionally strips only the torch stack (keeps upstream pins faithful),
-  so it does not strip numpy. The caching patch IS wired into this Dockerfile and will apply once
-  the numpy mismatch is resolved (options: also strip numpy + validate FastWAM on numpy 2.x, or
-  rebuild the plain layer on a numpy-1.26 base). Deferred — needs a decision, not a silent change.
+- `fastwam` (plain, on `ryzer_env`/rocm base): initially blocked by a pre-existing pin mismatch
+  (upstream `pyproject` pins `numpy==1.26.4` vs the plain base's `numpy 2.4.4` →
+  `ResolutionImpossible`; sim bases are on numpy 1.26.4 so were unaffected). **Resolved** by also
+  stripping the numpy pin in `strip_cuda_torch.py` (matching the Dockerfile's "pin the base's
+  torch + numpy" intent; the base version is then held via the `PIP_CONSTRAINT`). Rebuilt OK on
+  **numpy 2.4.4**; `planning_bench` (model load + `infer_action` across SDPA backends) PASSED,
+  12.41B params, patch present, and `text(T5)=0 ms` confirms the text-encode cache is live. Sim
+  bases stay on numpy 1.26.4 (constraint pins the base version), so stripping numpy is a no-op there.
 
 **Correctness of closed-loop:** since actions are bit-identical (Δ=0) through the full deploy
 path on real image+proprio inputs, closed-loop task success is provably unchanged; a full rollout
