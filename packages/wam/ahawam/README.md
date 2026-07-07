@@ -90,8 +90,20 @@ closed-loop numbers. They default to **AHA-WAM-Flash** (1 diffusion step) for re
 - **Open-loop replay** — predicted action chunks track ground truth: mean normalized MAE
   **0.0094**, raw-unit MAE **0.0060** (per-dim overlays confirm tight tracking on the
   large-motion arm joints).
-- **Closed-loop RoboTwin 2.0** — `click_bell` **2/2 = 100%** with rendered rollout videos;
-  re-verified **1/1** with the optimized AHA-WAM-Flash build.
+- **Closed-loop RoboTwin 2.0** — broader 5-task suite on the optimized AHA-WAM-Flash build
+  (1 step, `demo_clean`, 10 episodes/task, `chunks_per_video_prefill=2`), **36/50 = 72%**:
+
+  | Task | Success |
+  |---|---|
+  | `click_bell` | 10/10 (100%) |
+  | `handover_block` | 9/10 (90%) |
+  | `beat_block_hammer` | 7/10 (70%) |
+  | `place_object_basket` | 5/10 (50%) |
+  | `lift_pot` | 5/10 (50%) |
+  | **Overall** | **36/50 (72%)** |
+
+  The efficiency patch is lossless, so success reflects the model itself; the win is executor
+  latency (see below). Runs RoboTwin's own `eval_policy.py` + the `ahawam_policy` plugin.
 - **Interactive / real-time RoboTwin** — the `sim_robotwin.Policy` adapter drives both the
   chunk-replay and real-time (decoupled planner/exec, HOLD-while-thinking) demos; the
   `click_bell` interactive rollout completes the task with live 4-view MJPEG + saved MP4.
