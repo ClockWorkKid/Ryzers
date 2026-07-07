@@ -5,7 +5,7 @@
 Runs inside the built image with NO model weights. Proves the container has (1) a working
 ROCm torch on the iGPU and (2) the AHA-WAM package + its runtime deps import cleanly,
 before we pull the multi-GB Wan2.2 base + checkpoint. This image ships no simulator; the
-LIBERO/RoboTwin stacks live in the simulation/* base images this policy chains onto.
+RoboTwin 2.0 stack lives in the simulation/robotwin base image this policy chains onto.
 Exits non-zero on any failure so `ryzers run` / CI catches a broken image early.
 """
 import sys

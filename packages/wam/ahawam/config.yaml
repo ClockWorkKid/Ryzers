@@ -27,34 +27,28 @@ environment_variables:
 - "OUT_DIR=/outputs"
 # Per-demo knobs (override from the host: VAR=... ryzers run /ryzers/demos/demo_*.sh).
 - 'HF_TOKEN=${HF_TOKEN:-}'
+- 'WHICH=${WHICH:-}'
 - 'NUM_STEPS=${NUM_STEPS:-}'
 - 'SEED=${SEED:-}'
 - 'TAG=${TAG:-}'
-- 'SUITE=${SUITE:-}'
-- 'TASK_ID=${TASK_ID:-}'
-- 'NUM_TASKS=${NUM_TASKS:-}'
-- 'NUM_TRIALS=${NUM_TRIALS:-}'
 - 'NUM_EPISODES=${NUM_EPISODES:-}'
-- 'NUM_VIDEOS=${NUM_VIDEOS:-}'
-- 'VISUALIZE_FUTURE=${VISUALIZE_FUTURE:-}'
-# Interactive/real-time LIBERO demo knobs (require the simulation/libero base).
-- 'PORT=${PORT:-}'
-- 'VIEW_RES=${VIEW_RES:-}'
-- 'VIDEO_RES=${VIDEO_RES:-}'
-- 'RT_HZ=${RT_HZ:-}'
 - 'CKPT=${CKPT:-}'
 - 'DATASET_STATS=${DATASET_STATS:-}'
+- 'DATASET_DIR=${DATASET_DIR:-}'
 - 'MIXED_PRECISION=${MIXED_PRECISION:-}'
 - 'NUM_INFERENCE_STEPS=${NUM_INFERENCE_STEPS:-}'
-- 'REPLAN_STEPS=${REPLAN_STEPS:-}'
-- 'NUM_STEPS_WAIT=${NUM_STEPS_WAIT:-}'
-- 'POLICY_FACTORY=${POLICY_FACTORY:-}'
-# Interactive/closed-loop RoboTwin demo knobs (require the simulation/robotwin base).
+- 'CHUNKS_PER_VIDEO_PREFILL=${CHUNKS_PER_VIDEO_PREFILL:-}'
+# Async real-time serving demo knobs (deploy/ TCP server + async dummy client).
+- 'PORT=${PORT:-}'
+- 'INSTRUCTION=${INSTRUCTION:-}'
+- 'NUM_ACTION_REQUESTS=${NUM_ACTION_REQUESTS:-}'
+- 'ACTION_RATE=${ACTION_RATE:-}'
+- 'IMAGE_FPS=${IMAGE_FPS:-}'
+- 'PREFILL_WAIT=${PREFILL_WAIT:-}'
+# Closed-loop RoboTwin demo knobs (require the simulation/robotwin base).
 - 'TASK=${TASK:-}'
 - 'TASKS=${TASKS:-}'
 - 'TASK_CONFIG=${TASK_CONFIG:-}'
-- 'MAX_STEPS=${MAX_STEPS:-}'
-- 'ACTION_HORIZON=${ACTION_HORIZON:-}'
 
 volume_mappings:
 - "$PWD/workspace/ahawam/outputs:/outputs"

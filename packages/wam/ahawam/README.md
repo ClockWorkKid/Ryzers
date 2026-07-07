@@ -1,123 +1,96 @@
-### FastWAM
+### AHA-WAM
 
-This package runs [FastWAM](https://github.com/yuantianyuan01/FastWAM) — a Wan2.2-TI2V-5B
-world-action model (T5 text encoder + Wan VAE + video/action DiT) — on AMD Ryzen AI Max+
-395 (Strix Halo, `gfx1151`) under ROCm 7.2.2. Direct PyTorch port: upstream code runs on
-the base image's ROCm torch; only the CUDA torch pins are stripped.
+This package runs [AHA-WAM](https://github.com/serene-sivy/AHA-WAM) — an **asynchronous**
+Wan2.2-TI2V-5B world-action model (umt5-xxl text encoder + Wan VAE + video-DiT world planner
++ action-DiT executor) — on AMD Ryzen AI Max+ 395 (Strix Halo, `gfx1151`) under ROCm 7.2.2.
+Direct PyTorch port: upstream code runs on the base image's ROCm torch; only the CUDA torch
+pins are stripped. AHA-WAM is the direct successor of FastWAM; this package mirrors
+`packages/wam/fastwam`.
+
+AHA-WAM splits inference into two phases that can run at different rates:
+
+- `phase="video"` &rarr; Observation-Guided Video-Context prefill (the **slow planner**);
+- `phase="action"` &rarr; one Action-DiT chunk (`action_chunk_size` control steps) that reuses
+  the prefilled video KV cache (the **fast executor**).
 
 It is a **slim policy/model layer that ships no simulator**, and the reference consumer of
 the simulator packages' `Policy` seam. It composes on:
 
-- the plain ROCm base &rarr; non-sim demos (smoke / latency / open-loop / videogen);
-- the `simulation/libero` base &rarr; closed-loop + interactive LIBERO;
-- the `simulation/robotwin` base &rarr; closed-loop + interactive RoboTwin 2.0.
+- the plain ROCm base &rarr; non-sim demos (smoke / latency / open-loop);
+- the `simulation/robotwin` base &rarr; closed-loop RoboTwin 2.0.
 
-The same policy layer composes on all three because the FastWAM install is pinned to the
-base image's torch + numpy (so a plain base's numpy 2.x and a sim base's numpy 1.26.4 both
-work). Weights/datasets are fetched by the scripts below; sim assets come from the sim base.
+The AHA-WAM install is pinned to the base image's torch + numpy, so the same policy layer
+composes on a plain base (numpy 2.x) or the `simulation/robotwin` base (numpy 1.26.4).
+AHA-WAM ships **RoboTwin 2.0 weights only** (no LIBERO checkpoint). Weights/datasets are
+fetched by the scripts below; the ~12 GB Wan2.2 base is fetched automatically on the first
+model run (DiffSynth, default source ModelScope).
 
 ### Build
 
 ```sh
 # Standalone (non-sim demos + model sign-of-life):
-ryzers build fastwam --name fastwam
-ryzers run --name fastwam                 # test.py: ROCm torch + GPU + deps sign-of-life
+ryzers build ahawam --name ahawam
+ryzers run --name ahawam                  # test.py: ROCm torch + GPU + deps sign-of-life
 
-# Chain on a simulator base for closed-loop / interactive rollouts:
-ryzers build libero   fastwam --name fastwam-libero
-ryzers build robotwin fastwam --name fastwam-robotwin
+# Chain on the RoboTwin 2.0 simulator base for closed-loop rollouts:
+ryzers build robotwin ahawam --name ahawam-robotwin
 ```
 
-Artifacts are written to `workspace/*/outputs`. For faster/gated HF downloads set
-`HF_TOKEN`. The ~12 GB Wan2.2 base is fetched automatically on the first model run.
+Artifacts are written to `workspace/ahawam/outputs`. For faster/gated HF downloads set
+`HF_TOKEN`.
 
 ```sh
-ryzers run --name fastwam /ryzers/scripts/download_checkpoints.sh    # LIBERO + RoboTwin ckpts
-ryzers run --name fastwam /ryzers/scripts/download_datasets.sh       # open-loop / video data
+ryzers run --name ahawam /ryzers/scripts/download_checkpoints.sh all   # base + Flash ckpts
+ryzers run --name ahawam /ryzers/scripts/download_datasets.sh          # open-loop RoboTwin data
 ```
-
-The chain drives a sim base's model-agnostic `Policy` seam via a runtime adapter
-(`adapters/fastwam_{libero,robotwin}_policy.py`, selected by `POLICY_FACTORY`); these
-adapters double as the worked reference for wiring any VLA/WAM into the sim bases (see each
-`simulation/*` README). The RoboTwin closed-loop instead runs RoboTwin's own
-`script/eval_policy.py` against `experiments/robotwin/fastwam_policy`
-(`EVALUATION.robotwin_root=/opt/RoboTwin`).
 
 ### Demos
 
 | Demo | Base | What it does |
 |---|---|---|
-| `demos/demo_smoke.sh` | plain | Load checkpoint, one `infer_action`; cold/steady latency + VRAM. |
-| `demos/demo_latency.sh` | plain | Per-part latency (T5 / VAE / world prefill / plan) + SDPA backends. |
-| `demos/demo_openloop.sh` | plain | Replay GT observations, overlay predicted vs GT action chunks + MAE. |
-| `demos/demo_videogen.sh` | plain | Imagine future frames from the first observation; GT-vs-imagined clips. |
-| `demos/demo_closedloop_libero.sh` | `libero` | Closed-loop LIBERO rollouts (MuJoCo/EGL) + success rate. |
-| `demos/demo_interactive_libero.sh` / `_rt.sh` | `libero` | Interactive LIBERO over HTTP/MJPEG. |
-| `demos/demo_closedloop_robotwin.sh` | `robotwin` | Closed-loop RoboTwin 2.0 rollouts (SAPIEN Vulkan RT) + success rate. |
-| `demos/demo_interactive_robotwin.sh` / `_rt.sh` | `robotwin` | Interactive RoboTwin over HTTP/MJPEG. |
+| `demos/demo_smoke.sh` | plain | Build the real model, load ckpt, one two-phase `infer_action`; cold/steady latency + VRAM. |
+| `demos/demo_latency.sh` | plain | Two-phase latency: slow video prefill vs fast action chunk, executor control Hz + SDPA backends. |
+| `demos/demo_openloop.sh` | plain | Replay GT RoboTwin episodes, overlay predicted vs GT action chunks + MAE. |
+| `demos/demo_async_rt.sh` | plain | Async real-time serving: upstream `deploy/` TCP server (`--async-mode`) + async dummy client. |
+| `demos/demo_closedloop_robotwin.sh` | `robotwin` | Closed-loop RoboTwin 2.0 rollouts (SAPIEN Vulkan RT) + success rate + videos. |
 
 ```sh
-ryzers run --name fastwam        /ryzers/demos/demo_smoke.sh
-ryzers run --name fastwam-libero /ryzers/demos/demo_closedloop_libero.sh
+ryzers run --name ahawam /ryzers/demos/demo_smoke.sh
+ryzers run --name ahawam /ryzers/demos/demo_async_rt.sh                 # WHICH=flash (default)
 TASKS="click_bell lift_pot" NUM_EPISODES=10 \
-  ryzers run --name fastwam-robotwin /ryzers/demos/demo_closedloop_robotwin.sh
-ryzers run --name fastwam-robotwin /ryzers/demos/demo_interactive_robotwin.sh   # http://localhost:8082
+  ryzers run --name ahawam-robotwin /ryzers/demos/demo_closedloop_robotwin.sh
 ```
 
-### Open-loop replay
+The RoboTwin closed-loop runs RoboTwin's own `script/eval_policy.py` against the upstream
+`experiments/robotwin/ahawam_policy` plugin (`EVALUATION.robotwin_root=/opt/RoboTwin`),
+scheduling the two phases via `EVALUATION.chunks_per_video_prefill`. The async real-time
+demo reuses the upstream `deploy/` stack unchanged (server + async dummy client).
 
-Predicted action chunks track ground truth over 100 episodes: mean normalized MAE
-**0.0222** (LIBERO) / **0.0208** (RoboTwin), action inference ~1.5 s.
+### Results (Strix Halo, Radeon 8060S, gfx1151, ROCm 7.2.2)
 
-<p align="center">
-  <img src="assets/d1_libero_per_dim_mae.png" alt="open-loop per-dim MAE, LIBERO" width="700">
-  <br><em>Per-dimension normalized MAE (LIBERO).</em>
-</p>
-<p align="center">
-  <img src="assets/d1_libero_ep00.png" alt="open-loop GT-vs-pred overlay, LIBERO episode 0" width="700">
-  <br><em>GT (solid) vs predicted (dashed) action chunks, LIBERO episode 0.</em>
-</p>
-
-### Video imagination
-
-Joint path imagines the future video + actions (GT left, imagined right). Steady-state
-joint latency ~18.6 s (LIBERO) / ~21.9 s (RoboTwin) for a 33-frame clip at 20 denoise
-steps (the first call pays a one-time ROCm warmup).
-
-<p align="center">
-  <img src="assets/d2_libero.gif" alt="GT vs imagined, LIBERO" width="600">
-  <br><em>Ground truth vs imagined future (LIBERO).</em>
-</p>
-<p align="center">
-  <img src="assets/d2_robotwin.gif" alt="GT vs imagined, RoboTwin" width="600">
-  <br><em>Ground truth vs imagined future (RoboTwin).</em>
-</p>
-
-### Closed-loop LIBERO
-
-`libero_object` suite, 10 tasks × 20 trials: **199/200 (99.5%)** success, rendered headless
-via EGL. With `VISUALIZE_FUTURE=true` the slow path also renders the model's imagined future
-alongside the real rollout (GT left, imagined right; PSNR ~27.3 dB).
-
-<p align="center">
-  <img src="assets/d3_libero.gif" alt="closed-loop LIBERO rollout" width="400">
-  <img src="assets/d4_slow.gif" alt="closed-loop slow path, GT vs imagined" width="400">
-  <br><em>Closed-loop rollout (left) and slow-path GT-vs-imagined (right).</em>
-</p>
+- **Model smoke** — real 13.74 B-param model loads and runs both phases end-to-end;
+  action chunk `(16, 14)`, steady-state ~1.6 s at 10 denoise steps, peak ~30.5 GB.
+- **Open-loop replay** — predicted action chunks track ground truth: mean normalized MAE
+  **0.0094**, raw-unit MAE **0.0060** (per-dim overlays confirm tight tracking on the
+  large-motion arm joints).
+- **Closed-loop RoboTwin 2.0** — `click_bell` **2/2 = 100%** with rendered rollout videos.
+- **Async real-time** — Flash (`num_inference_steps=1`) async serving: 30/30 action
+  requests, 0 errors, 648 image frames pushed concurrently on the decoupled channel.
+  Two-phase latency: video prefill **407 ms** (amortized in background), action chunk
+  **405 ms** &rarr; **~39.5 control Hz** executor throughput.
 
 ### Useful knobs
 
-- Non-sim: `DATASET=libero|robotwin` (open-loop/videogen/latency), `NUM_STEPS`, `SEED`.
-- Closed-loop LIBERO: `SUITE`, `NUM_TASKS`, `NUM_TRIALS`, `VISUALIZE_FUTURE`.
-- Closed-loop RoboTwin: `TASKS`, `TASK_CONFIG`, `NUM_EPISODES`.
-- Interactive: `PORT`, `CKPT`, `DATASET_STATS`, `REPLAN_STEPS`, `NUM_INFERENCE_STEPS`.
-- `HF_TOKEN` for faster/gated downloads.
+- Non-sim: `WHICH=flash|robotwin` (async/latency), `NUM_STEPS`, `SEED`, `NUM_EPISODES`.
+- Async RT: `PORT`, `INSTRUCTION`, `NUM_ACTION_REQUESTS`, `ACTION_RATE`, `IMAGE_FPS`, `PREFILL_WAIT`.
+- Closed-loop RoboTwin: `TASKS`, `TASK_CONFIG`, `NUM_EPISODES`, `CHUNKS_PER_VIDEO_PREFILL`, `NUM_INFERENCE_STEPS`.
+- `CKPT`, `DATASET_STATS` to point at specific weights; `HF_TOKEN` for faster/gated downloads.
 
 ### References
 
-- Upstream: https://github.com/yuantianyuan01/FastWAM (pinned in `docs/UPSTREAM_PIN.commit.txt`)
-- Model: https://huggingface.co/yuanty/fastwam
-- Datasets: https://huggingface.co/datasets/yuanty/LIBERO-fastwam · https://huggingface.co/datasets/yuanty/robotwin2.0-fastwam
+- Upstream: https://github.com/serene-sivy/AHA-WAM (pinned in `docs/UPSTREAM_PIN.commit.txt`)
+- Checkpoints: https://huggingface.co/SereneC/AHA-WAM-RoboTwin2.0
+- Dataset: https://huggingface.co/datasets/yuanty/robotwin2.0-fastwam
 
 Copyright (C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 SPDX-License-Identifier: MIT
