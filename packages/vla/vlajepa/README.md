@@ -71,6 +71,35 @@ rotation, 8-d `[eef_pos, quat2axisangle, gripper_qpos]` state, gripper `1-2*g` r
 LIBERO `{-1 open,+1 close}`) matches upstream `examples/LIBERO/eval_libero.py`, so success
 rates are comparable to the reference deployment.
 
+### Closed-loop LIBERO-Plus robustness (capability 4)
+
+[LIBERO-Plus](https://github.com/sylvestf/LIBERO-plus) is a drop-in LIBERO replacement that
+expands the suites into 10,030 perturbation instances across **7 robustness dimensions**
+(camera viewpoints, robot initial states, language instructions, light conditions,
+background textures, sensor noise, objects layout) and 5 difficulty levels. VLA-JEPA is the
+first model ported to it here. It layers on the [`simulation/libero-plus`](../../simulation/libero-plus)
+base through the same seam, via `adapters/vlajepa_liberoplus_policy.py` (identical
+preprocessing to the LIBERO adapter — LIBERO-Plus keeps the exact obs/action conventions).
+
+```sh
+ryzers build libero-plus vlajepa                              # chain: simulation/libero-plus -> vlajepa
+ryzers run /ryzers/demos/demo_closedloop_liberoplus.sh        # 1 trial/task -> robustness_summary.json
+CATEGORY="Camera Viewpoints" MAX_TASKS=60 \
+  ryzers run /ryzers/demos/demo_closedloop_liberoplus.sh      # slice by perturbation dimension
+SUITE=libero_goal DIFFICULTY=3 \
+  ryzers run /ryzers/demos/demo_closedloop_liberoplus.sh      # slice by difficulty level
+ryzers run /ryzers/demos/demo_interactive_liberoplus.sh       # live browser demo on a perturbed scene (:8080)
+ryzers run /ryzers/demos/demo_interactive_liberoplus_rt.sh    # real-time demo, robot HOLDs while planning (:8081)
+```
+
+The runner selects tasks by `CATEGORY` / `DIFFICULTY` from the upstream
+`task_classification.json`, runs a single trial per task (the LIBERO-Plus convention), and
+writes an aggregate `robustness_summary.json` with overall + **per-dimension** +
+**per-difficulty** success rates (the paper's reporting style) plus rollout MP4s under
+`workspace/vlajepa/outputs/liberoplus/<TAG>/<SUITE>/`. Since a full suite is thousands of
+tasks, `MAX_TASKS` (default 40) caps/samples the selection (`SAMPLE=1`, seeded); set
+`MAX_TASKS=0` for the whole slice.
+
 ### Useful Knobs
 
 - `MODEL_REPO` / `CKPT_REL` — VLA-JEPA HF repo + which sub-checkpoint to load
@@ -83,6 +112,9 @@ rates are comparable to the reference deployment.
 - Closed-loop: `SUITE`, `NUM_TASKS`, `TASK_ID`, `NUM_TRIALS`, `SEED`, `MAX_STEPS`,
   `REPLAN_STEPS` (default = action chunk), `NUM_STEPS_WAIT` (default 10), `IMAGE_SIZE`
   (0 = native render res), `SAVE_VIDEO` / `NUM_VIDEOS`, `TAG`.
+- LIBERO-Plus: `CATEGORY` (one of the 7 dimensions, or `all`), `DIFFICULTY` (1–5, or `all`),
+  `MAX_TASKS` (default 40; 0 = all), `SAMPLE` (1 = random-sample the cap, seeded), plus the
+  closed-loop knobs above.
 
 ### Roadmap (this package)
 
@@ -90,7 +122,7 @@ rates are comparable to the reference deployment.
 - [x] Open-loop replay on LeRobot/LIBERO episodes with GT-vs-pred plots (capability 2).
 - [x] Closed-loop LIBERO evaluation in MuJoCo via the `simulation/libero` base (capability 3).
 - [x] Live interactive demos (standard + real-time), served over HTTP/MJPEG.
-- [ ] LIBERO-Plus perturbation-dimension closed-loop eval.
+- [x] LIBERO-Plus perturbation-dimension closed-loop eval via the `simulation/libero-plus` base (capability 4).
 - [ ] SimplerEnv closed-loop (SAPIEN/Vulkan) — stretch.
 
 Closed-loop LIBERO success (10 trials/task, 10 tasks/suite, seed 1000, gfx1151):

@@ -69,7 +69,16 @@ environment_variables:
 - 'NUM_VIDEOS=${NUM_VIDEOS:-}'
 - 'TAG=${TAG:-}'
 - 'PORT=${PORT:-}'
+- 'RT_HZ=${RT_HZ:-}'
 - 'POLICY_FACTORY=${POLICY_FACTORY:-}'
+# LIBERO-Plus robustness knobs (only used when chained on the simulation/libero-plus base:
+# ryzers build libero-plus vlajepa). CATEGORY is one of the 7 perturbation dimensions,
+# DIFFICULTY is 1-5, MAX_TASKS caps/samples the selection.
+- 'CATEGORY=${CATEGORY:-}'
+- 'DIFFICULTY=${DIFFICULTY:-}'
+- 'MAX_TASKS=${MAX_TASKS:-}'
+- 'SAMPLE=${SAMPLE:-}'
+- 'LIBEROPLUS_CLASSIFICATION=${LIBEROPLUS_CLASSIFICATION:-}'
 
 volume_mappings:
 - "$PWD/workspace/vlajepa/outputs:/outputs"

@@ -1,0 +1,43 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# init_image omitted: ryzers defaults to the ROCm 7.2.2 base
+# (rocm/pytorch torch 2.10.0), which already ships the ROCm torch stack.
+# This is a model-agnostic simulator base; chain a policy on top with
+#   ryzers build simulation/libero-plus <policy>
+
+gpu_support: true
+x11_display: false
+
+environment_variables:
+- "HSA_OVERRIDE_GFX_VERSION=11.5.1"
+- "MUJOCO_GL=egl"
+- "PYOPENGL_PLATFORM=egl"
+- "TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1"
+- "TORCH_BLAS_PREFER_HIPBLASLT=0"
+# Distinct container target so this base's outputs mount does not collide with a
+# policy layer's /outputs when chained (ryzers concatenates volume mappings). When a
+# policy is chained on top, its /outputs wins for the policy demos.
+- "OUT_DIR=/sim_outputs"
+# Sim/harness knobs (override from the host: VAR=... ryzers run /ryzers/demos/demo_*.sh).
+- 'SUITE=${SUITE:-}'
+- 'TASK_ID=${TASK_ID:-}'
+- 'SEED=${SEED:-}'
+- 'STEPS=${STEPS:-}'
+- 'PORT=${PORT:-}'
+- 'VIEW_RES=${VIEW_RES:-}'
+- 'VIDEO_RES=${VIDEO_RES:-}'
+- 'RT_HZ=${RT_HZ:-}'
+# LIBERO-Plus perturbation selection (used by chained closed-loop runners):
+# CATEGORY is one of the 7 dimensions, DIFFICULTY is 1-5, or empty for all.
+- 'CATEGORY=${CATEGORY:-}'
+- 'DIFFICULTY=${DIFFICULTY:-}'
+- 'MAX_TASKS=${MAX_TASKS:-}'
+- 'NUM_TRIALS=${NUM_TRIALS:-}'
+# Override path to task_classification.json (defaults to the installed LIBERO-Plus copy).
+- 'LIBEROPLUS_CLASSIFICATION=${LIBEROPLUS_CLASSIFICATION:-}'
+# Policy selection: module:function returning a sim_liberoplus.Policy (default RandomPolicy).
+- 'POLICY_FACTORY=${POLICY_FACTORY:-}'
+
+volume_mappings:
+- "$PWD/workspace/simulation-libero-plus/outputs:/sim_outputs"
