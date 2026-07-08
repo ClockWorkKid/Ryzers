@@ -29,7 +29,7 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     print(f"[sanity] setting up {task} ({task_config}, seed={seed}) ...", flush=True)
-    scene = RoboTwinScene(task, task_config=task_config, seed=seed)
+    scene = RoboTwinScene.build_stable(task, task_config=task_config, seed=seed)
     instruction = scene.default_instruction()
     print(f"[sanity] scene ready: \"{instruction}\" | step_lim={scene.step_lim}", flush=True)
 

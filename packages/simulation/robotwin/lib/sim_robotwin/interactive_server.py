@@ -79,8 +79,9 @@ def engine_thread():
             state["scene"] = None
         with LOCK:
             STATE["status"] = f"loading scene {task} (seed {seed}) ..."
-        state["scene"] = RoboTwinScene(task, task_config=TASK_CONFIG, seed=seed)
-        state["task"], state["seed"] = task, seed
+        scene = RoboTwinScene.build_stable(task, task_config=TASK_CONFIG, seed=seed)
+        state["scene"] = scene
+        state["task"], state["seed"] = task, scene.seed
 
     def show_idle(keep_video=False):
         sc = state["scene"]

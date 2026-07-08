@@ -29,6 +29,22 @@ def _instantiate_task(task_name):
     return env_class()
 
 
+def _unstable_error():
+    """RoboTwin's UnStableError (raised when placed objects don't settle at a seed).
+
+    Imported lazily because it's only importable after the chdir + PYTHONPATH wiring.
+    Falls back to a never-matching sentinel so callers can still `except` it safely.
+    """
+    try:
+        _ensure_cwd()
+        from envs.utils.create_actor import UnStableError  # noqa: WPS433
+        return UnStableError
+    except Exception:  # noqa: BLE001
+        class _NeverRaised(Exception):
+            pass
+        return _NeverRaised
+
+
 def list_tasks():
     """Enumerate available RoboTwin task names (envs/<task>.py) for the env-picker dropdown.
 
@@ -103,6 +119,32 @@ def load_task_args(task_name, task_config):
 
 class RoboTwinScene:
     """A single configured RoboTwin task episode (setup, obs, step, render, success)."""
+
+    @classmethod
+    def build_stable(cls, task_name, task_config="demo_clean", seed=0, video_dir=None,
+                     max_attempts=15):
+        """Build a scene, advancing the seed past ones whose objects don't settle.
+
+        Some RoboTwin tasks (e.g. pick_diverse_bottles) randomize object placement and
+        reject seeds where the physics settle check fails, raising ``UnStableError``.
+        RoboTwin's own eval_policy.py skips such seeds and tries the next one; this mirrors
+        that so the interactive/sanity harness self-heals instead of dead-ending on a bad
+        seed. The returned scene's ``.seed`` reflects the seed that actually succeeded.
+        """
+        unstable = _unstable_error()
+        attempts = max(1, int(max_attempts))
+        cur = int(seed)
+        last_err = None
+        for i in range(attempts):
+            try:
+                return cls(task_name, task_config=task_config, seed=cur, video_dir=video_dir)
+            except unstable as e:
+                last_err = e
+                print(f"[scene] {task_name}: unstable seed {cur} "
+                      f"({i + 1}/{attempts}), advancing seed", flush=True)
+                cur += 1
+        raise last_err if last_err is not None else RuntimeError(
+            f"scene build failed for {task_name}")
 
     def __init__(self, task_name, task_config="demo_clean", seed=0, video_dir=None):
         self.task_name = task_name

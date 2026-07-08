@@ -37,7 +37,7 @@ from libero.libero.envs import OffScreenRenderEnv
 
 LIBERO_ENV_RESOLUTION = 256  # resolution used to render training data
 
-SUITES = ["libero_object", "libero_goal", "libero_spatial", "libero_10"]
+SUITES = ["libero_object", "libero_goal", "libero_spatial", "libero_10", "libero_90"]
 
 _SUITE_MAX_STEPS = {
     "libero_spatial": 400,
