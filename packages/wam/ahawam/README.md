@@ -90,20 +90,23 @@ closed-loop numbers. They default to **AHA-WAM-Flash** (1 diffusion step) for re
 - **Open-loop replay** — predicted action chunks track ground truth: mean normalized MAE
   **0.0094**, raw-unit MAE **0.0060** (per-dim overlays confirm tight tracking on the
   large-motion arm joints).
-- **Closed-loop RoboTwin 2.0** — broader 5-task suite on the optimized AHA-WAM-Flash build
-  (1 step, `demo_clean`, 10 episodes/task, `chunks_per_video_prefill=2`), **36/50 = 72%**:
+- **Closed-loop RoboTwin 2.0** — broader 5-task suite on the optimized image
+  (`demo_clean`, 10 episodes/task, `chunks_per_video_prefill=2`, same seeds):
 
-  | Task | Success |
-  |---|---|
-  | `click_bell` | 10/10 (100%) |
-  | `handover_block` | 9/10 (90%) |
-  | `beat_block_hammer` | 7/10 (70%) |
-  | `place_object_basket` | 5/10 (50%) |
-  | `lift_pot` | 5/10 (50%) |
-  | **Overall** | **36/50 (72%)** |
+  | Task | AHA-WAM-Flash (1-step) | AHA-WAM base (10-step) |
+  |---|---|---|
+  | `click_bell` | 10/10 (100%) | 10/10 (100%) |
+  | `handover_block` | 9/10 (90%) | 7/10 (70%) |
+  | `beat_block_hammer` | 7/10 (70%) | 4/10 (40%) |
+  | `place_object_basket` | 5/10 (50%) | 3/10 (30%) |
+  | `lift_pot` | 5/10 (50%) | 5/10 (50%) |
+  | **Overall** | **36/50 (72%)** | **29/50 (58%)** |
 
-  The efficiency patch is lossless, so success reflects the model itself; the win is executor
-  latency (see below). Runs RoboTwin's own `eval_policy.py` + the `ahawam_policy` plugin.
+  The ODE-distilled **Flash (1 step) matches or exceeds the base model (10 steps) on every
+  task** here while running ~2.66x faster on the executor (small 10-episode samples, so
+  treat +/-1-2 episodes as noise). The efficiency patch is lossless, so success reflects the
+  model itself; the win is executor latency (see below). Runs RoboTwin's own
+  `eval_policy.py` + the `ahawam_policy` plugin.
 - **Interactive / real-time RoboTwin** — the `sim_robotwin.Policy` adapter drives both the
   chunk-replay and real-time (decoupled planner/exec, HOLD-while-thinking) demos; the
   `click_bell` interactive rollout completes the task with live 4-view MJPEG + saved MP4.
