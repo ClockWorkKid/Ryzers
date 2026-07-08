@@ -1,0 +1,54 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# init_image omitted: ryzers defaults to the ROCm 7.2.2 base
+# (rocm/pytorch torch 2.10.0), which already ships the ROCm torch stack.
+# This is a model-agnostic simulator base (SimplerEnv real-to-sim on SAPIEN/Vulkan);
+# chain a policy on top with:  ryzers build simulation/simplerenv <policy>
+
+gpu_support: true
+x11_display: false
+
+environment_variables:
+- "HSA_OVERRIDE_GFX_VERSION=11.5.1"
+- "TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1"
+- "TORCH_BLAS_PREFER_HIPBLASLT=0"
+- "HF_HOME=/root/.cache/huggingface"
+- 'HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET:-1}'
+- 'HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER:-0}'
+- 'HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT:-60}'
+- "HF_HUB_DISABLE_TELEMETRY=1"
+- "TOKENIZERS_PARALLELISM=false"
+- 'HF_TOKEN=${HF_TOKEN:-}'
+# SimplerEnv (main / ManiSkill2) uses SAPIEN 2 CPU physics + offscreen Vulkan rendering.
+# CPU physics is chosen deliberately: ManiSkill3's speed relies on GPU PhysX, which is
+# CUDA/NVIDIA-only and does not accelerate on gfx1151; only SAPIEN *rendering* is Vulkan
+# (AMD-friendly, via the same Mesa ICD + /dev/dri path as simulation/robotwin). This also
+# matches the visual-matching setup used for the VLA-JEPA paper's SimplerEnv numbers.
+- "SAPIEN_HEADLESS=1"
+# Point Vulkan at the Mesa RADV ICD (headless offscreen). Set at runtime if the base image
+# does not already resolve it; robotwin relies on the system default, we make it explicit.
+- 'VK_ICD_FILENAMES=${VK_ICD_FILENAMES:-/usr/share/vulkan/icd.d/radeon_icd.x86_64.json}'
+# Assets/models under a distinct container path so this base's mount does not collide with
+# a policy layer's /models when chained (ryzers concatenates volume mappings).
+- "SIMPLERENV_ASSETS_DIR=/sim_models/simplerenv_assets"
+# Distinct outputs target so chaining a policy (whose /outputs wins) does not collide.
+- "OUT_DIR=/sim_outputs"
+# Sim/harness knobs (override from host: VAR=... ryzers run /ryzers/demos/demo_*.sh).
+# TASK is a SimplerEnv task id (e.g. google_robot_pick_coke_can, widowx_carrot_on_plate).
+- 'TASK=${TASK:-}'
+- 'EMBODIMENT=${EMBODIMENT:-}'
+- 'SEED=${SEED:-}'
+- 'NUM_EPISODES=${NUM_EPISODES:-}'
+- 'MAX_STEPS=${MAX_STEPS:-}'
+- 'PORT=${PORT:-}'
+- 'VIEW_RES=${VIEW_RES:-}'
+- 'VIDEO_RES=${VIDEO_RES:-}'
+- 'RT_HZ=${RT_HZ:-}'
+# Policy selection: module:function returning a sim_simplerenv.Policy (default RandomPolicy).
+- 'POLICY_FACTORY=${POLICY_FACTORY:-}'
+
+volume_mappings:
+- "$PWD/workspace/simulation-simplerenv/outputs:/sim_outputs"
+- "$PWD/workspace/simulation-simplerenv/models:/sim_models"
+- "$PWD/workspace/.cache/huggingface:/root/.cache/huggingface"
