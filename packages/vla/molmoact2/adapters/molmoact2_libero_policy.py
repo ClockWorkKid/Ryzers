@@ -1,146 +1,97 @@
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""MolmoAct2 LIBERO policy adapter for the shared simulation/libero harness.
+"""MolmoAct2 LIBERO policy adapter for the shared simulation/libero harness (bridge client).
 
-Implements the model-agnostic `sim_libero.Policy` seam by wrapping MolmoAct2's *lerobot*
-policy (the same `make_policy` / `make_pre_post_processors` path the validated
-`lerobot-eval --policy.type=molmoact2 --env.type=libero` run and the bundled interactive
-server use), but driving it from the shared harness's env instead of lerobot's own env.
+Implements the model-agnostic `sim_libero.Policy` seam. MolmoAct2's LIBERO policy is the
+allenai lerobot stack (lerobot 0.5.1 hard-pins numpy>=2, transformers 5.3), which cannot
+co-exist in the base harness venv (numpy 1.26 / robosuite 1.4). So the policy runs in the
+isolated `/opt/libero-venv` behind `scripts/molmoact2_policy_server.py`, and this adapter is
+a thin localhost-HTTP client: it forwards the raw robosuite obs the server needs
+(agentview + wrist image, eef pos/quat, gripper qpos) and receives the OSC-delta chunk.
 
-Selected at runtime by the sim harness via
-  POLICY_FACTORY=molmoact2_libero_policy:build_policy
+Selected at runtime via POLICY_FACTORY=molmoact2_libero_policy:build_policy.
 
-Env knobs: CKPT (default allenai/MolmoAct2-Think-LIBERO), THINK (1), NUM_STEPS
-(flow-matching denoise steps; blank=model default), SUITE, REPLAN_STEPS, NUM_STEPS_WAIT.
-
-STATUS: skeleton on the spin-off branch `benchmark-molmoact2-libero`. The plumbing that
-loads the lerobot policy is the proven path; the observation mapping + action extraction
-(marked `# VALIDATE-ON-BOX`) must be confirmed against the actual lerobot MolmoAct2 policy
-on strix-halo before this is merged into `benchmark`. See docs/LIBERO_SIMBASE_ADAPTATION.md.
+Env: MM2_SERVER_PORT (8790), MM2_SERVER_TIMEOUT (server-ready wait, s; default 900),
+REPLAN_STEPS (chunk replay length; large -> replay the whole model chunk like lerobot-eval),
+NUM_STEPS_WAIT (episode-start settle no-ops).
 """
+import base64
+import json
 import os
+import time
+import urllib.request
 
 import numpy as np
 
 from sim_libero.policy import Policy
 
-DEFAULT_CKPT = "allenai/MolmoAct2-Think-LIBERO"
+PORT = int(os.environ.get("MM2_SERVER_PORT") or "8790")
+BASE = f"http://127.0.0.1:{PORT}"
+
+
+def _post(path, obj, timeout=120):
+    data = json.dumps(obj).encode()
+    req = urllib.request.Request(BASE + path, data=data,
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode())
+
+
+def _health():
+    try:
+        with urllib.request.urlopen(BASE + "/health", timeout=5) as r:
+            return json.loads(r.read().decode())
+    except Exception:  # noqa: BLE001 - server not up yet
+        return None
 
 
 class MolmoAct2LiberoPolicy(Policy):
     name = "molmoact2"
 
-    def __init__(self, policy, preprocessor, postprocessor, action_dim=7):
-        self.policy = policy
-        self.preprocessor = preprocessor
-        self.postprocessor = postprocessor
-        self.action_dim = action_dim
-        # MolmoAct2 runs a receding-horizon action queue; replan cadence mirrors fastwam.
-        self.replan_steps = int(os.environ.get("REPLAN_STEPS") or 5)
-        self.num_steps_wait = int(os.environ.get("NUM_STEPS_WAIT") or 5)
+    def __init__(self):
+        # MolmoAct2 predicts a full action chunk and lerobot-eval executes the whole chunk
+        # before re-planning, so replay the entire returned chunk (large replan_steps) unless
+        # overridden. num_steps_wait settles the scene at episode start.
+        self.replan_steps = int(os.environ.get("REPLAN_STEPS") or 256)
+        self.num_steps_wait = int(os.environ.get("NUM_STEPS_WAIT") or 10)
 
     def reset(self, instruction):
-        # MolmoAct2-Think caches its depth/spatial plan once per episode; clear it so a new
-        # instruction takes effect (mirror the interactive server's per-command reset).
-        try:
-            self.policy.reset()
-        except Exception:  # noqa: BLE001 - best-effort
-            pass
+        _post("/reset", {"instruction": instruction})
 
-    def _obs_to_batch(self, obs, instruction):
-        """Map the raw robosuite obs dict -> the lerobot observation batch the MolmoAct2
-        policy preprocessor expects.
-
-        VALIDATE-ON-BOX: confirm the exact keys/shapes/orientation the MolmoAct2 lerobot
-        policy consumes. Best current understanding (LIBERO lerobot convention):
-          observation.images.image        <- agentview_image
-          observation.images.wrist_image  <- robot0_eye_in_hand_image
-          observation.state               <- [eef_pos(3), eef_axis_angle(3), gripper_qpos(2)]
-          task                            <- instruction (string)
-        `sim_libero.get_libero_image` rotates images 180 deg to match FastWAM training;
-        MolmoAct2's lerobot LIBERO env may use a different orientation -- verify and match
-        it here (use the raw obs images with the correct flip).
-        """
-        import torch
-
-        def _img(key):
-            arr = np.ascontiguousarray(obs[key])  # HWC uint8; orientation VALIDATE-ON-BOX
-            return torch.from_numpy(arr)
-
-        eef_pos = np.asarray(obs.get("robot0_eef_pos", np.zeros(3)), dtype=np.float32)
-        # axis-angle preferred; fall back to quat if the axis-angle key is absent.
-        eef_rot = np.asarray(
-            obs.get("robot0_eef_axis_angle", obs.get("robot0_eef_quat", np.zeros(3)))[:3],
-            dtype=np.float32,
-        )
-        grip = np.asarray(obs.get("robot0_gripper_qpos", np.zeros(2)), dtype=np.float32)
-        state = torch.from_numpy(np.concatenate([eef_pos, eef_rot, grip]).astype(np.float32))
-
-        return {
-            "observation.images.image": _img("agentview_image"),
-            "observation.images.wrist_image": _img("robot0_eye_in_hand_image"),
-            "observation.state": state,
-            "task": [instruction],
-        }
+    @staticmethod
+    def _img_b64(arr):
+        a = np.ascontiguousarray(arr, dtype=np.uint8)  # raw HWC (lerobot feeds raw pixels)
+        return base64.b64encode(a.tobytes()).decode(), list(a.shape)
 
     def predict_action_chunk(self, obs, instruction):
-        import torch
-
-        batch = self._obs_to_batch(obs, instruction)
-        with torch.no_grad():
-            batch = self.preprocessor(batch)
-            # VALIDATE-ON-BOX: lerobot policies expose either predict_action_chunk(batch)
-            # -> [B, T, action_dim] or select_action(batch) -> [B, action_dim] (drained
-            # from an internal queue). Prefer the chunk API; fall back to single-step.
-            if hasattr(self.policy, "predict_action_chunk"):
-                chunk = self.policy.predict_action_chunk(batch)
-            else:
-                chunk = self.policy.select_action(batch)
-            out = self.postprocessor({"action": chunk})
-            action = out["action"] if isinstance(out, dict) else out
-
-        action = np.asarray(action.detach().to("cpu").float().numpy())
-        action = np.atleast_2d(action.reshape(-1, self.action_dim))  # -> [T, 7]
-        return action.astype(np.float32)
+        img_b64, shape = self._img_b64(obs["agentview_image"])
+        wrist_b64, _ = self._img_b64(obs["robot0_eye_in_hand_image"])
+        payload = {
+            "instruction": instruction,
+            "image": img_b64, "image2": wrist_b64, "img_shape": shape,
+            "eef_pos": np.asarray(obs["robot0_eef_pos"], dtype=np.float64).reshape(-1)[:3].tolist(),
+            "eef_quat": np.asarray(obs["robot0_eef_quat"], dtype=np.float64).reshape(-1)[:4].tolist(),
+            "gripper_qpos": np.asarray(obs["robot0_gripper_qpos"], dtype=np.float64).reshape(-1)[:2].tolist(),
+        }
+        out = _post("/act", payload)
+        return np.asarray(out["action"], dtype=np.float32).reshape(-1, 7)
 
 
 def build_policy():
-    import draccus
-    from lerobot.configs.eval import EvalPipelineConfig
-    from lerobot.policies.factory import make_policy, make_pre_post_processors
-
-    ckpt = os.environ.get("CKPT") or DEFAULT_CKPT
-    think = (os.environ.get("THINK", "1") == "1")
-    depth = "True" if think else "False"
-    suite = os.environ.get("SUITE") or "libero_object"
-
-    # Parse the eval config to obtain policy + env metadata WITHOUT building lerobot's env
-    # (the shared sim_libero harness owns the env). --env.type=libero is only used for the
-    # action/state feature metadata make_policy needs.
-    args = [
-        "--policy.type=molmoact2", f"--policy.checkpoint_path={ckpt}",
-        "--policy.inference_action_mode=continuous",
-        f"--policy.enable_depth_reasoning={depth}", f"--policy.enable_adaptive_depth={depth}",
-        "--policy.enable_cuda_graph=False", "--policy.norm_tag=libero",
-        "--policy.device=cuda", "--env.type=libero",
-        f"--env.task={suite}", "--env.task_ids=[0]",
-        "--eval.batch_size=1", "--eval.n_episodes=1",
-        "--output_dir=/tmp/molmoact2_simbase",
-    ]
-    if os.environ.get("NUM_STEPS"):
-        args.append(f"--policy.num_steps={os.environ['NUM_STEPS']}")
-
-    cfg = draccus.parse(EvalPipelineConfig, args=args)
-    policy = make_policy(cfg=cfg.policy, env_cfg=cfg.env, rename_map=cfg.rename_map)
-    policy.eval()
-    preprocessor, postprocessor = make_pre_post_processors(
-        policy_cfg=cfg.policy, pretrained_path=cfg.policy.pretrained_path,
-        preprocessor_overrides={
-            "device_processor": {"device": str(policy.config.device)},
-            "rename_observations_processor": {"rename_map": cfg.rename_map},
-        },
-    )
-
-    print(f"[molmoact2_libero_policy] policy ready (ckpt={ckpt}, think={think}, "
-          f"suite={suite})", flush=True)
-    return MolmoAct2LiberoPolicy(policy, preprocessor, postprocessor)
+    timeout = float(os.environ.get("MM2_SERVER_TIMEOUT") or "900")
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        h = _health()
+        if h is not None:
+            if h.get("ready"):
+                print(f"[molmoact2_libero_policy] bridge ready at {BASE}", flush=True)
+                return MolmoAct2LiberoPolicy()
+            if h.get("error"):
+                raise RuntimeError(f"MolmoAct2 policy server failed to load:\n{h['error']}")
+            last = "loading"
+        time.sleep(3)
+    raise RuntimeError(
+        f"MolmoAct2 policy server not ready at {BASE} within {timeout:.0f}s (state={last}). "
+        f"Start it in /opt/libero-venv (the demos do this): "
+        f"/opt/libero-venv/bin/python /ryzers/molmoact2_policy_server.py")
