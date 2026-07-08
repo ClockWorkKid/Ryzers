@@ -27,6 +27,8 @@ environment_variables:
 - 'PORT=${PORT:-}'
 - 'VIEW_RES=${VIEW_RES:-}'
 - 'VIDEO_RES=${VIDEO_RES:-}'
+- 'RENDER_RES=${RENDER_RES:-}'
+- 'MAX_STEPS=${MAX_STEPS:-}'
 - 'RT_HZ=${RT_HZ:-}'
 # LIBERO-Plus perturbation selection (used by chained closed-loop runners):
 # CATEGORY is one of the 7 dimensions, DIFFICULTY is 1-5, or empty for all.

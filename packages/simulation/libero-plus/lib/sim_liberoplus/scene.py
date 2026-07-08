@@ -31,13 +31,50 @@ class Scene:
         self.objects = self._list_objects()
 
     def _list_objects(self):
+        """Best-effort manipulable-object names for the viewport panel.
+
+        Tries the benchmark task's declared objects of interest, then falls back to parsing
+        the task's BDDL `(:objects ...)` block (instance names like `akita_black_bowl_1`,
+        normalised to `akita black bowl`). Cosmetic only, so any failure yields [].
+        """
         try:
-            names = list(getattr(self.task, "object_of_interest", []))
+            names = list(getattr(self.task, "object_of_interest", []) or [])
             if names:
-                return [n.replace("_", " ") for n in names]
+                return self._clean_names(names)
+        except Exception:
+            pass
+        try:
+            import pathlib
+            import re
+
+            from sim_liberoplus.libero_env import get_libero_path
+
+            bddl = (pathlib.Path(get_libero_path("bddl_files"))
+                    / self.task.problem_folder / self.task.bddl_file)
+            block = re.search(r"\(:objects(.*?)\)", bddl.read_text(), re.S)
+            names = []
+            if block:
+                for line in block.group(1).splitlines():
+                    line = line.strip()
+                    if not line or line.startswith(";"):
+                        continue
+                    names.extend(line.split(" - ")[0].split())
+            if names:
+                return self._clean_names(names)
         except Exception:
             pass
         return []
+
+    @staticmethod
+    def _clean_names(names):
+        import re
+        seen, out = set(), []
+        for n in names:
+            base = re.sub(r"_\d+$", "", str(n)).replace("_", " ").strip()
+            if base and base not in seen:
+                seen.add(base)
+                out.append(base)
+        return out
 
     def reset(self):
         """Reset to the task's first initial state; returns the raw obs dict."""
