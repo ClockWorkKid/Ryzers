@@ -76,3 +76,6 @@ workspace/
 
 # Auto-generated ryzers run wrappers (machine-specific)
 ryzers.run.*.sh
+
+# Ryzers CLI local build state (machine-specific)
+ryzers/_ryzers.yaml
