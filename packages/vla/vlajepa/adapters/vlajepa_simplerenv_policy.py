@@ -174,6 +174,8 @@ def build_policy():
     action_stats = norm_stats[unnorm_key]["action"]
 
     model = baseframework.from_pretrained(ckpt).to("cuda:0").to(dtype).eval()
+    from vlajepa_optim import apply_optimizations
+    apply_optimizations(model)  # near-lossless ~2.3-3.3x predict speedup; VLAJEPA_NO_OPT=1 to disable
     image_size = int(os.environ.get("IMAGE_SIZE") or 224)
     open_sign = float(os.environ.get("GRIPPER_OPEN_SIGN") or 1.0)
     use_ddim = (os.environ.get("USE_DDIM", "true").lower() not in ("0", "false", "no"))

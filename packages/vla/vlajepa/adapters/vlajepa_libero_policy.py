@@ -122,6 +122,8 @@ def build_policy():
     action_stats = norm_stats[unnorm_key]["action"]
 
     model = baseframework.from_pretrained(ckpt).to("cuda:0").to(dtype).eval()
+    from vlajepa_optim import apply_optimizations
+    apply_optimizations(model)  # near-lossless ~2.3-3.3x predict speedup; VLAJEPA_NO_OPT=1 to disable
     chunk = model.config.framework.action_model.future_action_window_size + 1
     # Upstream eval replans once per full chunk (step % chunk == 0); default to that.
     replan = int(os.environ.get("REPLAN_STEPS") or chunk)
