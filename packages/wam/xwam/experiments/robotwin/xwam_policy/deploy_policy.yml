@@ -1,0 +1,20 @@
+# X-WAM RoboTwin deploy_policy base config. script/eval_policy.py loads this as the base
+# config; eval_robotwin_single.py supplies task/run overrides via --overrides. X-WAM inference
+# knobs default from the container env (CKPT_ROOT / EXP / WAN_CKPT_DIR) inside get_model.
+policy_name: xwam_policy
+task_name: null
+task_config: null
+ckpt_setting: null
+seed: 0
+instruction_type: unseen
+eval_num_episodes: 1
+
+# X-WAM inference knobs (async denoising is the headline efficiency lever).
+exp_path: null
+wan_checkpoint_dir: null
+steps: last
+denoise_steps: 50
+action_denoise_steps: 10
+action_length: 32
+replan_steps: 32
+cfg: 0.0

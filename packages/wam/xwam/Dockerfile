@@ -38,10 +38,14 @@ RUN git clone https://github.com/sharinka0715/X-WAM /repos/xwam && \
 # requirements.txt already comments out the torch* and flash-attn lines, so nothing tries to
 # install torch directly; the constraint is belt-and-suspenders against transitive upgrades.
 # flash-attn is intentionally NOT installed — modules/attention.py falls back to torch SDPA
-# on gfx1151 (flash-attn has no ROCm/gfx1151 wheel). numpy is left unpinned so X-WAM's
-# "numpy>=1.23.5,<2" resolves (downgrades a plain base's numpy 2.x to 1.26.x; a sim base is
-# already there).
-RUN pip freeze | grep -iE "^(torch|torchvision|torchaudio|torchcodec)==" > /opt/xwam-constraints.txt && \
+# on gfx1151 (flash-attn has no ROCm/gfx1151 wheel).
+#
+# numpy is ALSO pinned to whatever the base ships: the X-WAM deps otherwise pull numpy 2.x,
+# which breaks the numpy-1.x-ABI native extensions on the simulation bases (e.g. RoboTwin's
+# mplib 0.2.1 `convert_physx_component` segfaults under numpy 2.x). Pinning to the base's numpy
+# keeps the sim base at 1.26.x (mplib/sapien happy) and leaves a plain base unchanged; X-WAM
+# supports numpy>=1.23.5 so the model path is unaffected.
+RUN pip freeze | grep -iE "^(torch|torchvision|torchaudio|torchcodec|numpy)==" > /opt/xwam-constraints.txt && \
     cat /opt/xwam-constraints.txt && \
     PIP_CONSTRAINT=/opt/xwam-constraints.txt pip install --no-cache-dir -r /repos/xwam/requirements.txt && \
     PIP_CONSTRAINT=/opt/xwam-constraints.txt pip install --no-cache-dir \
@@ -57,6 +61,10 @@ RUN python -c "import torch; assert torch.version.hip, 'torch is not a ROCm buil
 COPY test.py /ryzers/
 COPY scripts/ /ryzers/scripts/
 COPY demos/ /ryzers/demos/
+# Closed-loop RoboTwin plugin (direct in-process X-WAM policy). RoboTwin's script/eval_policy.py
+# imports it via a symlink into <ROBOTWIN_ROOT>/policy created by eval_robotwin_single.py; only
+# used when this layer is chained on the simulation/robotwin base (ryzers build robotwin xwam).
+COPY experiments/ /ryzers/experiments/
 RUN chmod +x /ryzers/scripts/*.sh /ryzers/demos/*.sh 2>/dev/null || true
 
 CMD ["python", "/ryzers/test.py"]
