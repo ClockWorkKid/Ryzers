@@ -8,7 +8,7 @@ This package runs [MolmoAct2](https://huggingface.co/collections/allenai/molmoac
 ### Build
 
 ```sh
-ryzers build molmoact2
+ryzers build simulation/libero molmoact2
 ryzers run
 ```
 
@@ -31,7 +31,7 @@ For downloading weights faster from huggingface, set the environment variable HF
 To command a robot arm to perform tasks in the LIBERO-MuJoCo simulation environment from a browser:
 
 ```sh
-ryzers run /ryzers/demo_interactive.sh
+ryzers run /ryzers/demo_interactive_libero.sh
 ```
 
 Then open in a browser:
@@ -64,7 +64,7 @@ policy transfers naturally across robot embodiments in simulation.
 #### UR5e with Robotiq85 Gripper
 
 ```sh
-EMBODIMENT=ur5e ryzers run /ryzers/demo_interactive.sh
+EMBODIMENT=ur5e ryzers run /ryzers/demo_interactive_libero.sh
 ```
 
 <p align="center">
@@ -78,7 +78,7 @@ EMBODIMENT=ur5e ryzers run /ryzers/demo_interactive.sh
 #### xArm6
 
 ```sh
-EMBODIMENT=xarm6 ryzers run /ryzers/demo_interactive.sh
+EMBODIMENT=xarm6 ryzers run /ryzers/demo_interactive_libero.sh
 ```
 
 <p align="center">
@@ -96,7 +96,7 @@ occurs asynchronously. The robot holds its current pose while the next action
 chunk is computed. 
 
 ```sh
-ryzers run /ryzers/demo_interactive_rt.sh #optionally pass EMBODIMENT=xarm6 or EMBODIMENT=ur5e 
+ryzers run /ryzers/demo_interactive_libero_rt.sh #optionally pass EMBODIMENT=xarm6 or EMBODIMENT=ur5e 
 ```
 
 To see the demo in a browser, open:
@@ -117,8 +117,8 @@ RT_MAX_STEPS=3000 ryzers run /ryzers/demo_interactive_rt.sh
 Run a closed-loop LIBERO rollout in MuJoCo:
 
 ```sh
-ryzers run /ryzers/demo_libero.sh
-SUITE=libero_object TASK_ID=3 ryzers run /ryzers/demo_libero.sh
+ryzers run /ryzers/demo_closedloop_libero.sh
+SUITE=libero_object TASK_ID=3 ryzers run /ryzers/demo_closedloop_libero.sh
 ```
 
 Available suites:
