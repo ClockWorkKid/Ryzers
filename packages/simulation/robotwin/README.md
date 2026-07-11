@@ -47,6 +47,12 @@ returned chunk is execute-ready joint-space rows
 `[left_arm(6), left_gripper(1), right_arm(6), right_gripper(1)]` (aloha-agilex), run via
 `TASK_ENV.take_action(row, action_type="qpos")`.
 
+End-effector policies: set `action_type = "ee"` on your `Policy` to instead command absolute
+per-arm EE poses (`[left_xyz(3), left_quat_wxyz(4), left_grip(1), right_...]`, `[T, 16]`);
+the harness runs each row via `take_action(row, action_type="ee")` and RoboTwin solves IK with
+its own planner. Default is `"qpos"` (unchanged). See the X-WAM EE adapter
+(`wam/xwam/experiments/robotwin_xwam/xwam_policy/`) for a worked example.
+
 Connect a model in three steps (no edits to this package):
 
 1. Build your ryzer **FROM** the sim base, installing your model under the base's

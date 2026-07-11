@@ -27,13 +27,18 @@ class Policy(ABC):
 
     replan_steps = 8      # env steps executed per predicted chunk before replanning
     name = "policy"
+    # How the harness executes each predicted row via RoboTwin's TASK_ENV.take_action:
+    #   "qpos" (default) -> rows are joint-space [left_arm(6),left_grip(1),right_arm(6),right_grip(1)]
+    #   "ee"             -> rows are absolute end-effector poses (RoboTwin runs its own IK planner)
+    # A qpos policy (FastWAM/random) needs no change; an EE-space policy (X-WAM) sets "ee".
+    action_type = "qpos"
 
     def reset(self, instruction):
         """Called once per episode before the first prediction (clear caches, etc.)."""
 
     @abstractmethod
     def predict_action_chunk(self, obs, instruction):
-        """Return an ndarray of shape [T, action_dim] (per-arm qpos + gripper)."""
+        """Return an ndarray of shape [T, action_dim] (qpos rows, or EE-pose rows if action_type='ee')."""
 
     def warmup(self, obs, instruction):
         """Optional one-time forward so the first real episode isn't stalled."""

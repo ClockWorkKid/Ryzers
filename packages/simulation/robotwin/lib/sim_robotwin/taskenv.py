@@ -228,8 +228,27 @@ class RoboTwinScene:
         obs = obs or self.env.now_obs
         return np.asarray(obs["joint_action"]["vector"], dtype=np.float32)
 
-    def take_action(self, action):
-        self.env.take_action(np.asarray(action, dtype=np.float32), action_type="qpos")
+    def ee_state_vector(self, obs=None):
+        """Current absolute end-effector pose in RoboTwin's raw sim frame, laid out exactly
+        as ``take_action(action_type="ee")`` expects: [left_xyz(3), left_quat_wxyz(4),
+        left_grip(1), right_xyz(3), right_quat_wxyz(4), right_grip(1)] -> [16].
+
+        This is the EE counterpart of ``state_vector`` (qpos). The RT demo re-issues it to
+        HOLD the arms in place (freeze the current pose) while an EE-space policy is planning.
+        """
+        obs = obs or self.env.now_obs
+        ep = obs["endpose"]
+        left = np.concatenate([np.asarray(ep["left_endpose"], dtype=np.float64),
+                               [float(ep["left_gripper"])]])
+        right = np.concatenate([np.asarray(ep["right_endpose"], dtype=np.float64),
+                                [float(ep["right_gripper"])]])
+        return np.concatenate([left, right])
+
+    def take_action(self, action, action_type="qpos"):
+        # qpos rows are joint-space (float32 like RoboTwin's data); ee rows are absolute
+        # end-effector poses that RoboTwin's planner solves with IK (keep float64 precision).
+        dtype = np.float64 if action_type == "ee" else np.float32
+        self.env.take_action(np.asarray(action, dtype=dtype), action_type=action_type)
 
     def eval_frame(self):
         return np.asarray(self.env._get_eval_video_frame())[:, :, :3]

@@ -127,14 +127,18 @@ def engine_thread():
             STATE.pop("_video_path", None)
         STOP["flag"] = False
         replan_steps = int(getattr(policy, "replan_steps", 8))
+        action_type = getattr(policy, "action_type", "qpos")
         limit = max_steps or MAX_STEPS or sc.step_lim
         policy.reset(instr)
 
         buf = deque()
         buflock = threading.Lock()
         obs0 = sc.get_obs()
+        # HOLD re-issues the current pose in whatever space the policy commands: the qpos joint
+        # vector for qpos policies, or the absolute EE pose for EE-space policies (X-WAM).
+        hold_vec = sc.ee_state_vector(obs0) if action_type == "ee" else sc.state_vector(obs0)
         shared = {"obs": obs0, "done": False, "hold": 0, "total": 0,
-                  "last_vec": sc.state_vector(obs0)}
+                  "last_vec": hold_vec}
         frames = []
 
         def planner():
@@ -154,7 +158,7 @@ def engine_thread():
                     continue
                 with buflock:
                     for a in chunk[:replan_steps]:
-                        buf.append(np.asarray(a, dtype=np.float32))
+                        buf.append(np.asarray(a))
 
         pth = threading.Thread(target=planner, daemon=True)
         pth.start()
@@ -166,8 +170,8 @@ def engine_thread():
             if holding:
                 a = shared["last_vec"]
             else:
-                shared["last_vec"] = np.asarray(a, dtype=np.float32)
-            sc.take_action(a)
+                shared["last_vec"] = np.asarray(a)
+            sc.take_action(a, action_type=action_type)
             shared["total"] += 1
             shared["hold"] += int(holding)
 

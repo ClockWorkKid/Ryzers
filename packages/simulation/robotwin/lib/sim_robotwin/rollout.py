@@ -14,6 +14,7 @@ from collections import deque
 def run_episode(scene, policy, instruction, on_frame=None, should_stop=None, max_steps=None):
     """Drive one RoboTwin episode. Returns (success, steps_taken)."""
     replan_steps = int(getattr(policy, "replan_steps", 8))
+    action_type = getattr(policy, "action_type", "qpos")
     limit = int(max_steps) if max_steps else scene.step_lim
     scene.set_instruction(instruction)
     policy.reset(instruction)
@@ -30,7 +31,7 @@ def run_episode(scene, policy, instruction, on_frame=None, should_stop=None, max
                 queue.append(row)
         if not queue:
             break
-        scene.take_action(queue.popleft())
+        scene.take_action(queue.popleft(), action_type=action_type)
         steps += 1
         if on_frame is not None:
             on_frame(scene.eval_frame(), scene.take_action_cnt, len(queue) == 0)
