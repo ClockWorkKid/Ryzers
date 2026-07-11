@@ -1,6 +1,6 @@
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Embodiment swap for the MolmoAct2 x LIBERO demos.
+"""Embodiment swap for the MolmoAct2 x shared simulation/libero demos.
 
 The MolmoAct2-LIBERO policy talks to the sim purely in end-effector space:
   observation.state = [eef_pos(3), eef_axisangle(3), gripper_qpos(2)]  (world frame)
@@ -10,15 +10,19 @@ interface. Swapping the Panda for another arm therefore only changes the
 kinematics behind the same OSC controller; the action/observation contract is
 unchanged as long as the gripper keeps a 2-dim qpos.
 
-This module swaps the LIBERO arm by:
+This module swaps the LIBERO arm in the SHARED harness (base venv robosuite 1.4 /
+LIBERO) by:
   1. registering a robosuite robot model under the name LIBERO expects
      ("Mounted<Arm>"), reusing robosuite's stock arm assets, and
-  2. patching lerobot.envs.libero.OffScreenRenderEnv so every env is built with
-     robots=[<Arm>] and the requested arm gripper. Native grippers are mapped
-     back into Panda-style 2-dim qpos/qvel for policy compatibility.
+  2. patching sim_libero.libero_env.OffScreenRenderEnv so every env the harness
+     builds uses robots=[<Arm>] and the requested gripper. Native grippers are
+     mapped back into Panda-style 2-dim qpos/qvel for policy compatibility.
 
-Recorded init states are Panda-specific (different DoF), so callers must build
-the env with init_states=False.
+Recorded LIBERO init states are Panda-specific (different DoF), so the swapped env
+skips set_init_state (objects stay at their BDDL defaults, arm at its IK home).
+
+The MolmoAct2 bridge keeps the policy in the isolated /opt/libero-venv; this module
+only touches the harness-side sim, so no lerobot import is involved.
 
 Enabled via env vars (see apply_from_env):
   EMBODIMENT=ur5e            arm to swap in (default: unset -> stock Panda)
@@ -119,7 +123,7 @@ def _resolve_gripper(emb, gripper):
         return _DEFAULT_GRIPPER.get(emb, _FALLBACK_GRIPPER)
     return g
 
-# Set by apply() from the chosen arm+gripper; read by Mounted*.init_qpos and _format.
+# Set by apply() from the chosen arm+gripper; read by Mounted*.init_qpos and _remap.
 _ACTIVE_INIT_QPOS = _UR5E_INIT_QPOS_PANDA
 _ACTIVE_NATIVE = None
 _ACTIVE_EEF_OFFSET = 0.0
@@ -390,7 +394,7 @@ _APPLIED = None
 
 
 def apply(embodiment, gripper=None):
-    """Patch lerobot's LIBERO env builder to use the given arm + gripper.
+    """Patch the shared sim_libero LIBERO env builder to use the given arm + gripper.
 
     gripper=None/'default'/'native' selects the arm's default native gripper; an
     explicit name is honoured.
@@ -404,7 +408,7 @@ def apply(embodiment, gripper=None):
     if _APPLIED is not None:
         return _APPLIED
     if emb not in _REGISTRARS:
-        raise ValueError(f"Unknown EMBODIMENT={embodiment!r}; known: {sorted(_REGISTRARS)} (xarm6 pending an MJCF)")
+        raise ValueError(f"Unknown EMBODIMENT={embodiment!r}; known: {sorted(_REGISTRARS)}")
 
     gripper = _resolve_gripper(emb, gripper)
     robot_name, registrar = _REGISTRARS[emb]
@@ -412,7 +416,7 @@ def apply(embodiment, gripper=None):
         register_xarm_gripper()
 
     # Pick the arm+gripper-specific IK home and (for non-Panda grippers) the gripper
-    # observation remap. Read at env-build time via Mounted*.init_qpos / _format.
+    # observation remap. Read at env-build time via Mounted*.init_qpos / _remap_obs.
     global _ACTIVE_INIT_QPOS, _ACTIVE_NATIVE, _ACTIVE_EEF_OFFSET, _ACTIVE_CAMERA_OFFSET, _ACTIVE_XARM6_CAMERA_MATCH
     gkey = (gripper or "").lower()
     _ACTIVE_NATIVE = _NATIVE_GRIPPERS.get(gkey)
@@ -432,9 +436,9 @@ def apply(embodiment, gripper=None):
 
     registrar()
 
-    import lerobot.envs.libero as ll
+    import sim_libero.libero_env as le
 
-    base_env_cls = ll.OffScreenRenderEnv
+    base_env_cls = le.OffScreenRenderEnv
 
     def _osc_gain_override():
         """OSC (kp, damping_ratio) for this arm, or (None, None) to keep LIBERO's
@@ -501,84 +505,6 @@ def apply(embodiment, gripper=None):
             return "joint_ik"
         return ""
 
-    def _robosuite_env(libero_env):
-        # lerobot wraps the robosuite env in a GymWrapper-like object whose `.env`
-        # holds raw `_get_observations()`. Some paths expose robosuite directly.
-        return getattr(libero_env._env, "env", libero_env._env)
-
-    def _absolute_servo_step(self, action):
-        """Execute a MolmoAct2 delta as an absolute eef waypoint for xArm6.
-
-        MolmoAct2 still predicts Panda-trained relative OSC actions. For xArm6,
-        replaying those deltas one-shot accumulates under-tracking. This wrapper
-        converts the delta into a world-frame target pose anchored at the current
-        observed eef pose, then takes several feedback OSC substeps toward that
-        target before the policy receives the next observation.
-        """
-        a = np.asarray(action, dtype=np.float32).reshape(-1)
-        if a.ndim != 1 or a.shape[0] < 7:
-            raise ValueError(f"Expected 7-D action, got shape {np.asarray(action).shape}")
-
-        pos_scale = float(os.environ.get("EMBODIMENT_POS_SCALE") or "0.05")
-        rot_scale = float(os.environ.get("EMBODIMENT_ROT_SCALE") or "0.5")
-        steps = max(1, int(os.environ.get("EMBODIMENT_SERVO_STEPS") or "2"))
-        pos_tol = float(os.environ.get("EMBODIMENT_SERVO_POS_TOL") or "0.004")
-        rot_tol = float(os.environ.get("EMBODIMENT_SERVO_ROT_TOL") or "0.08")
-
-        rsenv = _robosuite_env(self)
-        raw0 = rsenv._get_observations()
-        start_pos, start_mat = _eef_from_raw(raw0)
-        target_pos = start_pos + np.asarray(a[:3], dtype=np.float64) * pos_scale
-        target_mat = _axisangle_to_mat(np.asarray(a[3:6], dtype=np.float64) * rot_scale) @ start_mat
-
-        raw_obs = raw0
-        info = {}
-        reward_total = 0.0
-        done = False
-        is_success = False
-        last_cmd = a.copy()
-
-        for _ in range(steps):
-            cur_pos, cur_mat = _eef_from_raw(raw_obs)
-            pos_err = target_pos - cur_pos
-            rot_err = _axis_error(target_mat, cur_mat)
-            cmd = np.zeros(7, dtype=np.float32)
-            cmd[:3] = np.clip(pos_err / pos_scale, -1.0, 1.0)
-            cmd[3:6] = np.clip(rot_err / rot_scale, -1.0, 1.0)
-            cmd[6] = a[6]
-            last_cmd = cmd
-
-            raw_obs, reward, done, info = self._env.step(cmd)
-            reward_total += float(np.asarray(reward).reshape(-1)[0])
-            is_success = bool(self._env.check_success())
-            if done or is_success:
-                break
-            if np.linalg.norm(pos_err) < pos_tol and np.linalg.norm(rot_err) < rot_tol:
-                break
-
-        terminated = bool(done or is_success)
-        info.update(
-            {
-                "task": self.task,
-                "task_id": self.task_id,
-                "done": bool(done),
-                "is_success": bool(is_success),
-                "embodiment_executor": "absolute",
-                "embodiment_servo_steps": steps,
-                "embodiment_last_action": last_cmd,
-            }
-        )
-        observation = self._format_raw_obs(raw_obs)
-        if terminated:
-            info["final_info"] = {
-                "task": self.task,
-                "task_id": self.task_id,
-                "done": bool(done),
-                "is_success": bool(is_success),
-            }
-            self.reset()
-        return observation, reward_total, terminated, False, info
-
     def _mj_model_data(sim):
         return (
             sim.model._model if hasattr(sim.model, "_model") else sim.model,
@@ -601,9 +527,6 @@ def apply(embodiment, gripper=None):
         if norm < 1e-9:
             return None
         return direction / norm * float(distance)
-
-    def _tool_axis_offset(libero_env, distance):
-        return _tool_axis_offset_from_rsenv(_robosuite_env(libero_env), distance)
 
     def _apply_camera_offset(rsenv):
         if not _ACTIVE_CAMERA_OFFSET:
@@ -651,19 +574,85 @@ def apply(embodiment, gripper=None):
             model.cam_pos[cam_id] = body_mat.T @ (target_world - body_pos)
         mujoco.mj_forward(model, data)
 
-    def _success(self, rsenv):
-        for candidate in (getattr(self, "_env", None), rsenv):
-            if candidate is None:
-                continue
-            fn = getattr(candidate, "check_success", None)
-            if callable(fn):
-                return bool(fn())
-            fn = getattr(candidate, "_check_success", None)
-            if callable(fn):
-                return bool(fn())
-        return False
+    def _remap_obs(rsenv, obs):
+        """Map a swapped arm's raw robosuite obs back to the Panda contract the
+        MolmoAct2 policy expects: optional native-tool eef offset, and native
+        gripper qpos/qvel -> Panda 2-dim [j1, -j1]. Images/eef pose are untouched."""
+        if not isinstance(obs, dict):
+            return obs
+        out = obs
+        if _ACTIVE_EEF_OFFSET and "robot0_eef_pos" in out:
+            offset = _tool_axis_offset_from_rsenv(rsenv, _ACTIVE_EEF_OFFSET)
+            if offset is not None:
+                out = dict(out)
+                out["robot0_eef_pos"] = np.asarray(out["robot0_eef_pos"], dtype=np.float64) + offset
+        if _ACTIVE_NATIVE:
+            q = out.get("robot0_gripper_qpos")
+            if q is not None and np.asarray(q).shape[-1] != 2:
+                di = _ACTIVE_NATIVE["driver_idx"]
+                open_q = _ACTIVE_NATIVE.get("open", 0.0)
+                closed = _ACTIVE_NATIVE["closed"]
+                span = max(closed - open_q, 1e-6)
+                out = dict(out)
+                frac = float(np.clip((np.asarray(q).reshape(-1)[di] - open_q) / span, 0.0, 1.0))
+                out["robot0_gripper_qpos"] = np.array([(1.0 - frac) * _PANDA_OPEN, -(1.0 - frac) * _PANDA_OPEN])
+                v = out.get("robot0_gripper_qvel")
+                if v is not None and np.asarray(v).shape[-1] != 2:
+                    v0 = float(np.asarray(v).reshape(-1)[di])
+                    scale = _PANDA_OPEN / span
+                    out["robot0_gripper_qvel"] = np.array([-scale * v0, scale * v0])
+        return out
 
-    def _joint_ik_servo_step(self, action):
+    def _absolute_servo_step(env, action):
+        """Execute a MolmoAct2 delta as an absolute eef waypoint for xArm6.
+
+        MolmoAct2 still predicts Panda-trained relative OSC actions. For xArm6,
+        replaying those deltas one-shot accumulates under-tracking. This wrapper
+        converts the delta into a world-frame target pose anchored at the current
+        observed eef pose, then takes several feedback OSC substeps toward that
+        target before the policy receives the next observation.
+        """
+        a = np.asarray(action, dtype=np.float32).reshape(-1)
+        if a.ndim != 1 or a.shape[0] < 7:
+            raise ValueError(f"Expected 7-D action, got shape {np.asarray(action).shape}")
+
+        pos_scale = float(os.environ.get("EMBODIMENT_POS_SCALE") or "0.05")
+        rot_scale = float(os.environ.get("EMBODIMENT_ROT_SCALE") or "0.5")
+        steps = max(1, int(os.environ.get("EMBODIMENT_SERVO_STEPS") or "2"))
+        pos_tol = float(os.environ.get("EMBODIMENT_SERVO_POS_TOL") or "0.004")
+        rot_tol = float(os.environ.get("EMBODIMENT_SERVO_ROT_TOL") or "0.08")
+
+        rsenv = env.env
+        raw0 = rsenv._get_observations()
+        start_pos, start_mat = _eef_from_raw(raw0)
+        target_pos = start_pos + np.asarray(a[:3], dtype=np.float64) * pos_scale
+        target_mat = _axisangle_to_mat(np.asarray(a[3:6], dtype=np.float64) * rot_scale) @ start_mat
+
+        raw_obs = raw0
+        info = {}
+        reward_total = 0.0
+        done = False
+
+        for _ in range(steps):
+            cur_pos, cur_mat = _eef_from_raw(raw_obs)
+            pos_err = target_pos - cur_pos
+            rot_err = _axis_error(target_mat, cur_mat)
+            cmd = np.zeros(7, dtype=np.float32)
+            cmd[:3] = np.clip(pos_err / pos_scale, -1.0, 1.0)
+            cmd[3:6] = np.clip(rot_err / rot_scale, -1.0, 1.0)
+            cmd[6] = a[6]
+
+            raw_obs, reward, done, info = rsenv.step(cmd)
+            reward_total += float(np.asarray(reward).reshape(-1)[0])
+            if done or env.check_success():
+                done = True
+                break
+            if np.linalg.norm(pos_err) < pos_tol and np.linalg.norm(rot_err) < rot_tol:
+                break
+
+        return _remap_obs(rsenv, raw_obs), reward_total, bool(done), info
+
+    def _joint_ik_servo_step(env, action):
         """MoveIt/xarm_ros2-style joint trajectory executor for xArm6.
 
         xarm_ros2 does not drive Cartesian OSC directly. It solves IK / servo in
@@ -678,7 +667,7 @@ def apply(embodiment, gripper=None):
         if a.ndim != 1 or a.shape[0] < 7:
             raise ValueError(f"Expected 7-D action, got shape {np.asarray(action).shape}")
 
-        rsenv = _robosuite_env(self)
+        rsenv = env.env
         sim = rsenv.sim
         model, data = _mj_model_data(sim)
 
@@ -716,8 +705,6 @@ def apply(embodiment, gripper=None):
         info = {}
         reward_total = 0.0
         done = False
-        is_success = False
-        cond = 0.0
 
         for _ in range(steps):
             cur_pos, cur_mat = _eef_from_raw(raw_obs)
@@ -766,36 +753,21 @@ def apply(embodiment, gripper=None):
 
             hold = np.zeros(7, dtype=np.float32)
             hold[6] = a[6]
-            raw_obs, reward, done, info = self._env.step(hold)
+            raw_obs, reward, done, info = rsenv.step(hold)
             reward_total += float(np.asarray(reward).reshape(-1)[0])
-            is_success = _success(self, rsenv)
-            if done or is_success:
+            if done or env.check_success():
+                done = True
                 break
 
-        terminated = bool(done or is_success)
-        info.update(
-            {
-                "task": self.task,
-                "task_id": self.task_id,
-                "done": bool(done),
-                "is_success": bool(is_success),
-                "embodiment_executor": "joint_ik",
-                "embodiment_servo_steps": steps,
-                "embodiment_ik_cond": cond,
-            }
-        )
-        observation = self._format_raw_obs(raw_obs)
-        if terminated:
-            info["final_info"] = {
-                "task": self.task,
-                "task_id": self.task_id,
-                "done": bool(done),
-                "is_success": bool(is_success),
-            }
-            self.reset()
-        return observation, reward_total, terminated, False, info
+        return _remap_obs(rsenv, raw_obs), reward_total, bool(done), info
+
+    transform = make_action_transform()
+    executor = _executor_mode()
 
     class _EmbodiedEnv(base_env_cls):
+        """sim_libero OffScreenRenderEnv that builds the swapped arm + gripper and
+        keeps the Panda observation/action contract for the MolmoAct2 policy."""
+
         def __init__(self, **kwargs):
             kwargs.setdefault("robots", [robot_name])
             if gripper and gripper.lower() != "default":
@@ -811,98 +783,38 @@ def apply(embodiment, gripper=None):
             if cf:
                 kwargs.setdefault("control_freq", float(cf))
             super().__init__(**kwargs)
-            # The OSC controller is (re)built by robosuite at construction; patch its
-            # gains in place. Re-applied after every reset (controller is rebuilt then).
-            _apply_osc_gains(self)
-            _apply_camera_offset(self)
-            _apply_xarm6_camera_match(self)
+            self._emb_tweaks()
 
-        def reset(self, *args, **kwargs):
-            out = super().reset(*args, **kwargs)
-            _apply_osc_gains(self)
-            _apply_camera_offset(self)
-            _apply_xarm6_camera_match(self)
-            return out
+        def _emb_tweaks(self):
+            # The OSC controller is (re)built by robosuite at construction / reset;
+            # patch its gains + camera placement in place afterwards.
+            _apply_osc_gains(self.env)
+            _apply_camera_offset(self.env)
+            _apply_xarm6_camera_match(self.env)
 
-    ll.OffScreenRenderEnv = _EmbodiedEnv
+        def reset(self):
+            obs = super().reset()
+            self._emb_tweaks()
+            return _remap_obs(self.env, obs)
 
-    # Recorded LIBERO init states are Panda-specific (different DoF), so loading
-    # them into another arm corrupts/crashes the sim. Force init_states off for
-    # any swapped arm regardless of how the env was configured, so the swap is
-    # self-contained (no reliance on the caller passing --env.init_states=False).
-    _orig_env_init = ll.LiberoEnv.__init__
+        def set_init_state(self, init_state):
+            # Recorded LIBERO init states are Panda-specific (7-DoF arm + Panda
+            # gripper); loading them into a 6-DoF arm corrupts the sim. Keep the arm
+            # at its IK home and objects at their BDDL defaults (== init_states=False),
+            # so the swap needs no Panda-shaped state.
+            self._emb_tweaks()
+            return _remap_obs(self.env, self.env._get_observations())
 
-    def _env_init(self, *a, **kw):
-        kw["init_states"] = False
-        _orig_env_init(self, *a, **kw)
-        self.init_states = False
-        self._init_states = None
-
-    ll.LiberoEnv.__init__ = _env_init
-
-    # The gym vector env batches the FULL observation against the Panda-shaped
-    # observation_space (joint_pos/joint_vel = 7). A 6-DoF arm reports 6 joints,
-    # which breaks the batched np.stack even though the policy only consumes the
-    # 8-dim eef+gripper state. Pad joints to 7 so the obs matches the space; the
-    # padded entries are unused by the policy.
-    _orig_format = ll.LiberoEnv._format_raw_obs
-
-    def _format(self, raw_obs):
-        if _ACTIVE_EEF_OFFSET and isinstance(raw_obs, dict):
-            offset = _tool_axis_offset(self, _ACTIVE_EEF_OFFSET)
-            if offset is not None and "robot0_eef_pos" in raw_obs:
-                raw_obs = dict(raw_obs)
-                raw_obs["robot0_eef_pos"] = np.asarray(raw_obs["robot0_eef_pos"], dtype=np.float64) + offset
-        obs = _orig_format(self, raw_obs)
-        rs = obs.get("robot_state") if isinstance(obs, dict) else None
-        if rs and isinstance(rs.get("joints"), dict):
-            for k in ("pos", "vel"):
-                v = rs["joints"].get(k)
-                if v is not None:
-                    v = np.asarray(v)
-                    if v.shape[-1] < 7:
-                        pad = np.zeros(7 - v.shape[-1], dtype=v.dtype)
-                        rs["joints"][k] = np.concatenate([v, pad])
-        # Native (non-Panda) grippers report a gripper_qpos/qvel with a different
-        # joint count/units than the Panda 2-dim [j1, -j1] the policy expects. Map
-        # the driver joint's closure fraction onto Panda finger units so both the
-        # observation_space shape (2,) and the policy's state distribution match.
-        if _ACTIVE_NATIVE and rs and isinstance(rs.get("gripper"), dict):
-            di = _ACTIVE_NATIVE["driver_idx"]
-            open_q = _ACTIVE_NATIVE.get("open", 0.0)
-            closed = _ACTIVE_NATIVE["closed"]
-            span = max(closed - open_q, 1e-6)
-            g = rs["gripper"]
-            q = g.get("qpos")
-            if q is not None and np.asarray(q).shape[-1] != 2:
-                frac = float(np.clip((np.asarray(q).reshape(-1)[di] - open_q) / span, 0.0, 1.0))
-                g["qpos"] = np.array([(1.0 - frac) * _PANDA_OPEN, -(1.0 - frac) * _PANDA_OPEN])
-            v = g.get("qvel")
-            if v is not None and np.asarray(v).shape[-1] != 2:
-                v0 = float(np.asarray(v).reshape(-1)[di])
-                scale = _PANDA_OPEN / span
-                g["qvel"] = np.array([-scale * v0, scale * v0])
-        return obs
-
-    ll.LiberoEnv._format_raw_obs = _format
-
-    # Install optional execution wrappers on env.step. Rotation offsets transform
-    # the policy action before execution; the absolute executor then turns the
-    # transformed delta into an absolute xArm6 target and servoes internally.
-    executor = _executor_mode()
-    if os.environ.get("EMBODIMENT_ROT_DEG", "").strip() or executor:
-        transform = make_action_transform()
-        _orig_step = ll.LiberoEnv.step
-
-        def _step(self, action):
+        def step(self, action):
             a = transform(action)
             if executor == "absolute":
                 return _absolute_servo_step(self, a)
             if executor == "joint_ik":
                 return _joint_ik_servo_step(self, a)
-            return _orig_step(self, a)
+            obs, reward, done, info = self.env.step(a)
+            return _remap_obs(self.env, obs), reward, done, info
 
-        ll.LiberoEnv.step = _step
+    le.OffScreenRenderEnv = _EmbodiedEnv
 
     _APPLIED = robot_name
     return robot_name

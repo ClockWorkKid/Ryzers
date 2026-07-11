@@ -127,5 +127,23 @@ COPY scripts/_hf_common.sh scripts/download.sh scripts/download_smoke.sh scripts
      scripts/download_interactive_embodiment.sh /ryzers/
 RUN chmod +x /ryzers/*.sh
 
+# ============================================================================
+# Shared simulation/libero base integration (chain build: `ryzers build simulation/libero
+# molmoact2`). On the shared base the model-agnostic harness (/opt/sim/sim_libero, /opt/LIBERO)
+# owns the env + episode loop; MolmoAct2 plugs in through the sim_libero.Policy seam. The
+# lerobot MolmoAct2 policy (numpy 2 / transformers 5.3, installed above in /opt/libero-venv)
+# hard-pins numpy>=2 and cannot share the base harness venv (numpy 1.26 / robosuite 1.4), so
+# it runs as a localhost policy server (molmoact2_policy_server.py, /opt/libero-venv) and the
+# base-venv adapter (/opt/molmoact2-adapters) is a thin HTTP client selected via
+# POLICY_FACTORY=molmoact2_libero_policy:build_policy. These files are harmless on the
+# standalone base; the demos guard on /opt/sim/sim_libero. See docs/LIBERO_SIMBASE_ADAPTATION.md.
+# ============================================================================
+COPY adapters/molmoact2_libero_policy.py /opt/molmoact2-adapters/molmoact2_libero_policy.py
+COPY scripts/molmoact2_policy_server.py scripts/start_policy_server.sh \
+     scripts/molmoact2_run_harness.py /ryzers/
+COPY demos/demo_closedloop_libero.sh demos/demo_interactive_libero.sh \
+     demos/demo_interactive_libero_rt.sh /ryzers/
+RUN chmod +x /ryzers/*.sh
+
 # Default `ryzers run` (no CMD override) = lightweight env sign-of-life (no weights).
 CMD ["python", "/ryzers/test.py"]

@@ -87,18 +87,19 @@ RUN python -c "import torch; assert torch.version.hip, 'torch is not a ROCm buil
 # Demo entrypoints + smoke + open-loop replay + latent-imagination + HF helpers.
 COPY test.py /ryzers/
 COPY scripts/model_smoke.py scripts/openloop_replay.py scripts/imagine_latent.py /ryzers/
-COPY scripts/closedloop_libero.py scripts/closedloop_liberoplus.py /ryzers/
+COPY scripts/closedloop_libero.py scripts/closedloop_liberoplus.py scripts/closedloop_simplerenv.py /ryzers/
 COPY demos/demo_smoke.sh demos/demo_openloop.sh demos/demo_imagine.sh /ryzers/
 COPY scripts/_hf_common.sh scripts/download.sh scripts/download_smoke.sh scripts/download_openloop.sh /ryzers/
 
-# LIBERO / LIBERO-Plus closed-loop / interactive demos + the sim_libero(plus).Policy adapters.
+# LIBERO / LIBERO-Plus / SimplerEnv closed-loop / interactive demos + the sim_*.Policy adapters.
 # These only do anything when this layer is chained on the matching simulation base
-# (ryzers build libero vlajepa / ryzers build libero-plus vlajepa): each adapter imports its
-# sim harness (sim_libero / sim_liberoplus), and the demos add it to PYTHONPATH and set
-# POLICY_FACTORY. On a non-matching base they are inert (unused) files.
+# (ryzers build libero vlajepa / libero-plus vlajepa / simulation/simplerenv vlajepa): each
+# adapter imports its sim harness (sim_libero / sim_liberoplus / sim_simplerenv), and the demos
+# add it to PYTHONPATH and set POLICY_FACTORY. On a non-matching base they are inert files.
 COPY adapters/ /opt/vlajepa-adapters/
 COPY demos/demo_closedloop_libero.sh demos/demo_interactive_libero.sh demos/demo_interactive_libero_rt.sh /ryzers/demos/
 COPY demos/demo_closedloop_liberoplus.sh demos/demo_interactive_liberoplus.sh demos/demo_interactive_liberoplus_rt.sh /ryzers/demos/
+COPY demos/demo_closedloop_simplerenv.sh demos/demo_interactive_simplerenv.sh demos/demo_interactive_simplerenv_rt.sh /ryzers/demos/
 RUN chmod +x /ryzers/*.sh /ryzers/demos/*.sh
 
 # Default `ryzers run` (no CMD override) = lightweight env sign-of-life (no weights).

@@ -86,12 +86,28 @@ class ConfigManager:
         cameras = True
         extra_run_flags = ""
 
+        # Dedupe volume/port mappings by their container-side target (the part after ':').
+        # When several packages are chained (e.g. multiple simulator bases + a policy), two
+        # configs may map different host paths to the SAME container path -- Docker rejects
+        # that with "Duplicate mount point". Last definition wins so the most-derived (policy)
+        # layer's mount takes precedence, mirroring how the later -e wins for env vars. For a
+        # single package (or non-colliding chains) this is a no-op.
+        vol_by_target = {}
+        port_by_target = {}
+        for c in self.configentries:
+            if c.key == "volume_mappings":
+                vol_by_target[c.value] = c   # c.value = container path (after ':')
+            elif c.key == "port_mappings":
+                port_by_target[c.value] = c
+
         for c in self.configentries:
             print(str(c))
             if c.key == "port_mappings":
-                runflags += f" -p {c}" 
+                if port_by_target.get(c.value) is c:
+                    runflags += f" -p {c}"
             if c.key == "volume_mappings":
-                runflags += f" -v {c}"                 
+                if vol_by_target.get(c.value) is c:
+                    runflags += f" -v {c}"
             if c.key == "environment_variables":
                 runflags += f" -e {c}"  
             if c.key == "gpu_support":

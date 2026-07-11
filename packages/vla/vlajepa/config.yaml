@@ -42,6 +42,9 @@ environment_variables:
 - 'BASE_VLM=${BASE_VLM:-Qwen/Qwen3-VL-2B-Instruct}'
 - 'BASE_ENCODER=${BASE_ENCODER:-facebook/vjepa2-vitl-fpc64-256}'
 - 'DTYPE=${DTYPE:-bfloat16}'
+# Runtime inference opts (bf16 head + skip lm_head + cross-attn KV cache + conv->matmul) are ON by
+# default across all sim paths (~2.3-3.3x faster predict, near-lossless). Set to 1 for the stock path.
+- 'VLAJEPA_NO_OPT=${VLAJEPA_NO_OPT:-}'
 - 'SEED=${SEED:-}'
 - 'EPISODE=${EPISODE:-}'
 - 'SUITE=${SUITE:-}'
@@ -79,6 +82,20 @@ environment_variables:
 - 'MAX_TASKS=${MAX_TASKS:-}'
 - 'SAMPLE=${SAMPLE:-}'
 - 'LIBEROPLUS_CLASSIFICATION=${LIBEROPLUS_CLASSIFICATION:-}'
+# SimplerEnv (WidowX / BridgeData v2) closed-loop knobs (only used when chained on the
+# simulation/simplerenv base: ryzers build simulation/simplerenv vlajepa). SAPIEN offscreen
+# Vulkan on gfx1151; RENDER_BACKEND auto-detects the GPU PCI address when empty. Assets land
+# under the persistent HF-cache mount (MS_ASSET_DIR) so they are reused across runs.
+- 'SAPIEN_HEADLESS=${SAPIEN_HEADLESS:-1}'
+- 'VK_ICD_FILENAMES=${VK_ICD_FILENAMES:-/usr/share/vulkan/icd.d/radeon_icd.json}'
+- 'RENDER_BACKEND=${RENDER_BACKEND:-}'
+- 'MS_ASSET_DIR=${MS_ASSET_DIR:-/root/.cache/huggingface/maniskill_assets}'
+- 'TASKS=${TASKS:-}'
+- 'GRIPPER_OPEN_SIGN=${GRIPPER_OPEN_SIGN:-}'
+- 'ENSEMBLE_HORIZON=${ENSEMBLE_HORIZON:-}'
+- 'ENSEMBLE_ALPHA=${ENSEMBLE_ALPHA:-}'
+- 'USE_DDIM=${USE_DDIM:-}'
+- 'NUM_DDIM_STEPS=${NUM_DDIM_STEPS:-}'
 
 volume_mappings:
 - "$PWD/workspace/vlajepa/outputs:/outputs"
