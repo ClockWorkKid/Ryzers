@@ -59,7 +59,38 @@ target: AMD Strix Halo (`gfx1151`), ROCm 7.2.2 · branch `wam-XWAM` off `benchma
   video + `_result_clean.txt` → laptop `artifacts/xwam/p4a_beat_block_hammer_success.mp4`
   (+ 4-frame montage `p4a_beat_block_hammer_frames.png`).
 
+## Phase 4b — closed-loop RoboCasa rollout ✅ (Gate 4b)
+- New `simulation/robocasa` base (robosuite master + robocasa 0.2 + MuJoCo 3.2.6, headless EGL);
+  kitchen assets fetched at runtime into the mounted volume (rule 8). Base validated on gfx1151
+  (`test.py` import + `demo_sim_sanity` render smoke).
+- X-WAM adapter `experiments/robocasa_xwam/xwam_policy/deploy_policy.py` implements the shared
+  `sim_robocasa.Policy` seam over the extracted in-process `DirectXWAM` (`experiments/xwam_core.py`).
+  RoboCasa is single-arm: the denormalized `(Ta, 7)` delta-EE chunk is fed straight into
+  robosuite's OSC_POSE composite controller (no IK / motion-planning seam).
+- Two ROCm/packaging fixes baked in (reproducible): the xwam layer's `ENV PYTHONPATH=/repos/xwam`
+  clobbered the base's `/opt/sim` (re-added in the demos); and the adapter dir was renamed
+  `robocasa` → `robocasa_xwam` because `experiments/` on `sys.path` made a dir literally named
+  `robocasa` shadow the real pip `robocasa` (namespace package → zero kitchen envs registered).
+- Result: `TurnOnSinkFaucet`, full horizon, **10 randomized episodes (seeds 0–9) → 9/10 = 90%**
+  success (successful runs early-stop in 5–9 model calls). Per-episode videos + `_result.json`
+  → laptop `artifacts/xwam/robocasa_cl10/`.
+
+## Phase 4c — interactive demos (both sims) ✅
+- Model-agnostic HTTP/MJPEG interactive servers (sync chunk-replay + real-time async-planner with
+  a HOLD-while-thinking view) shipped in each sim base, driven by X-WAM through the `Policy` seam.
+- RoboCasa: adapter is a thin single-arm wrapper (same 7-D delta path as closed-loop). Both
+  `demo_interactive_robocasa[_rt].sh` SMOKE PASS (load policy, HTTP-triggered rollout, stream +
+  save video).
+- RoboTwin: added `experiments/robotwin_xwam/xwam_policy` (interactive sibling of the closed-loop
+  seam) emitting absolute per-arm EE poses `[T,16]`, plus an additive `action_type` plumb in the
+  shared `sim_robotwin` harness (`Policy.action_type`, `Scene.take_action(action_type=...)`,
+  `Scene.ee_state_vector()` so the RT server HOLDs the current EE pose, not the qpos vector) —
+  default stays `"qpos"` so FastWAM/random are unaffected. The mplib/IK shim is applied lazily on
+  first predict (the harness only chdirs into `ROBOTWIN_ROOT` once a scene is built). Both
+  `demo_interactive_robotwin[_rt].sh` SMOKE PASS; RT run shows `hold%≈88` (planner delivers EE
+  chunks that execute, majority HOLD visualizes per-forward planning latency).
+
 ## Next
-- Phase 4b: RoboCasa (new sim base) via the same adapter seam.
+- Dev full manual repro test, then push `wam-XWAM` → `benchmark` (rule 0.3 approval).
 - Post-milestone: ANS efficiency sweep (`action_denoise_steps` vs `sample_steps`) toward
   real-time closed-loop; the ~10s action path is the current control-latency baseline.

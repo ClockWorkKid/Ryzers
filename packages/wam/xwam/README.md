@@ -21,8 +21,9 @@ simulator packages' `Policy` seam. It composes on:
 Weights (Wan2.2 base + X-WAM checkpoints) and datasets are fetched at runtime (rule 8); sim
 assets come from the sim base.
 
-> **Status: under development.** Phase 1 (image build + ROCm env sign-of-life) landing first;
-> forward-pass / open-loop / closed-loop phases follow (see `docs/PLAN.md`).
+> **Status.** Gates 1–4 landed: ROCm env sign-of-life, full-model forward, open-loop eval,
+> and closed-loop + interactive on **both** sim bases (RoboTwin 2.0 and RoboCasa). See
+> `docs/PORT_SUMMARY.md` for per-gate results and `docs/PLAN.md` for the roadmap.
 
 ### Build
 
@@ -41,6 +42,32 @@ Artifacts are written to `workspace/xwam/outputs`. For faster/gated HF downloads
 ```sh
 ryzers run --name xwam /ryzers/scripts/download_checkpoints.sh robotwin   # Wan2.2 base + robotwin_sft
 EXP=robotwin_sft ryzers run --name xwam /ryzers/demos/demo_smoke.sh       # full-model action smoke
+```
+
+### Demos
+
+Weights + sim assets are fetched on first run. The interactive demos serve a browser page over
+HTTP/MJPEG — tunnel the port with `ssh -L <PORT>:localhost:<PORT> <host>` and open
+`http://localhost:<PORT>`. Each drives X-WAM through the sim base's model-agnostic `Policy`
+seam (`POLICY_FACTORY`); the closed-loop runners write per-episode videos + a `_result.json`
+success rate.
+
+| Demo | Base | What it does |
+|---|---|---|
+| `demos/demo_smoke.sh` | plain | Full-model action smoke (no sim). |
+| `demos/demo_openloop.sh` | plain | Open-loop GT-vs-pred action replay + MAE plot. |
+| `demos/demo_closedloop_robotwin.sh` | robotwin | Closed-loop RoboTwin 2.0 rollouts (dual-arm EE via IK). |
+| `demos/demo_closedloop_robocasa.sh` | robocasa | Closed-loop RoboCasa kitchen rollouts (single-arm OSC_POSE). |
+| `demos/demo_interactive_robotwin.sh` | robotwin | Interactive RoboTwin (chunk-replay), `PORT=8082`. |
+| `demos/demo_interactive_robotwin_rt.sh` | robotwin | Real-time RoboTwin (async planner; arms HOLD while thinking), `PORT=8083`. |
+| `demos/demo_interactive_robocasa.sh` | robocasa | Interactive RoboCasa (chunk-replay), `PORT=8082`. |
+| `demos/demo_interactive_robocasa_rt.sh` | robocasa | Real-time RoboCasa (async planner + HOLD), `PORT=8083`. |
+
+```sh
+# e.g. interactive RoboCasa on the chained image:
+TASK=TurnOnSinkFaucet ryzers run --name xwam-robocasa /ryzers/demos/demo_interactive_robocasa.sh
+# closed-loop RoboCasa, 10 randomized episodes:
+TASK=TurnOnSinkFaucet NUM_EVALS=10 ryzers run --name xwam-robocasa /ryzers/demos/demo_closedloop_robocasa.sh
 ```
 
 ### Useful knobs

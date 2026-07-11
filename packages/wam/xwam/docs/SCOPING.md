@@ -115,14 +115,14 @@ RoboCasa (24 kitchen tasks) **79.2%** avg SR; RoboTwin 2.0 clean **89.8%** / ran
 (exists — RoboTwin 2.0, SAPIEN/Vulkan) and **`simulation/robocasa`** (NEW — robosuite/MuJoCo
 kitchen benchmark; the "RoboCase" in the task brief = RoboCasa).
 
-## 4. Remote strix-halo state (as scoped, this session)
+## 4. Remote target state (as scoped, this session)
 
-- Host `HP-Z2-Mini-G1a`, `gfx1151`, ROCm 7.2.2, ~955 GB free on `~`. **No containers running (free).**
-- `~/Ryzers-benchmark` = fork clone on branch `benchmark` (origin `ClockWorkKid/Ryzers` [ssh],
-  upstream `AMDResearch/Ryzers`), clean; has `packages/wam/{fastwam,ahawam}` and
+- Target: a Strix Halo (Ryzen AI Max+ 395, `gfx1151`) machine, ROCm 7.2.2, ample free disk.
+  Shared machine — GPU checked free before builds (rule 10).
+- A `Ryzers-benchmark` fork clone tracks branch `benchmark` (origin `ClockWorkKid/Ryzers`,
+  upstream `AMDResearch/Ryzers`); it already carries `packages/wam/{fastwam,ahawam}` and
   `packages/simulation/{libero,libero-plus,robotwin,simplerenv}`.
-- Also present: `~/Ryzers` (upstream), `~/Ryzers-fork`, `~/Ryzers-dreamzero`, plus prior Wan2.2-on-ROCm
-  work (`~/WAN-ryzers`, `~/wan22-fa-bench`, `~/patched_wan22`) — directly reusable since X-WAM's
+- Prior Wan2.2-on-ROCm porting work from earlier projects is directly reusable, since X-WAM's
   DiT/VAE/T5 come from Wan2.2 (same lineage as FastWAM/AHA-WAM).
 
 ## 5. Key decisions / assumptions

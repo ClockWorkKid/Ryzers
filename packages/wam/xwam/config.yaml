@@ -44,14 +44,19 @@ environment_variables:
 - 'NUM_EPISODES=${NUM_EPISODES:-}'
 - 'NUM_VIDEOS=${NUM_VIDEOS:-}'
 - 'VISUALIZE_FUTURE=${VISUALIZE_FUTURE:-}'
-# Interactive/closed-loop RoboTwin demo knobs (require the simulation/robotwin base).
+# Interactive/closed-loop sim demo knobs (require a simulation/{robotwin,robocasa} base).
 - 'TASK=${TASK:-}'
 - 'TASKS=${TASKS:-}'
 - 'TASK_CONFIG=${TASK_CONFIG:-}'
 - 'MAX_STEPS=${MAX_STEPS:-}'
 - 'ACTION_HORIZON=${ACTION_HORIZON:-}'
+- 'ACTION_LENGTH=${ACTION_LENGTH:-}'
+- 'REPLAN_STEPS=${REPLAN_STEPS:-}'
 - 'PORT=${PORT:-}'
 - 'POLICY_FACTORY=${POLICY_FACTORY:-}'
+# RoboCasa closed-loop eval knobs (multi-episode success rate; simulation/robocasa base).
+- 'NUM_EVALS=${NUM_EVALS:-}'
+- 'SEED_BASE=${SEED_BASE:-}'
 
 volume_mappings:
 - "$PWD/workspace/xwam/outputs:/outputs"

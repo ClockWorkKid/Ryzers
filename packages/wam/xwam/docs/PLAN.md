@@ -20,7 +20,7 @@ after plan sign-off. Machine is shared — check `docker ps` and wait for a free
 ---
 
 ## Phase 0 — Workspace & version control (this session)
-- [x] Scope upstream X-WAM + Ryzers benchmark + remote strix-halo (see `docs/xwam/SCOPING.md`).
+- [x] Scope upstream X-WAM + Ryzers benchmark + the remote Strix Halo target (see `docs/SCOPING.md`).
 - [ ] Remote `~/Ryzers-benchmark`: branch **`wam-XWAM`** off `benchmark`. No push until dev approval (rule 0.3).
 - [ ] Clone X-WAM upstream (pinned `72cfb86`, `--recurse-submodules`) to remote `~/X-WAM-src` for reference.
 - [ ] Scaffold `packages/wam/xwam/` + `packages/simulation/robocasa/` skeletons; laptop mirror of docs/skeleton.
@@ -56,15 +56,17 @@ Goal: image builds; the **full X-WAM model** loads on ROCm torch and runs one fo
   `deploy_policy` bridging to RoboTwin's `eval_policy.py`, reusing FastWAM/AHA-WAM RoboTwin wiring.
 - Map X-WAM's broker→server→client eval onto the shared harness (or run its own client against
   `simulation/robotwin`); single-GPU (`num_gpus=1`); headless SAPIEN Vulkan RT.
-- **Gate 4a:** ≥1 RoboTwin task rollout completes with success; video + success rate to `/outputs`.
-### 4b. RoboCasa (NEW base `simulation/robocasa`)
+- **Gate 4a:** ✅ `beat_block_hammer` rollout → 1/1 success; video + `_result_clean.txt` to `/outputs`.
+### 4b. RoboCasa (NEW base `simulation/robocasa`) ✅
 - New `packages/simulation/robocasa/`: robosuite + robocasa (MuJoCo, EGL headless), assets fetched
   at build/runtime from upstream (rule 8); model-agnostic `Policy` seam mirroring `simulation/libero`.
-- `adapters/xwam_robocasa_policy.py`; run ≥1 of the 24 kitchen tasks.
-- **Gate 4b:** ≥1 RoboCasa task rollout completes; base validated with `test.py` render smoke on gfx1151.
-### 4c. Interactive demos
+- `experiments/robocasa_xwam/xwam_policy/` (7-D delta-EE via OSC_POSE); runs the 24 kitchen tasks.
+- **Gate 4b:** ✅ `TurnOnSinkFaucet` 10-episode eval → 9/10 = 90%; base validated with `test.py`
+  render smoke on gfx1151.
+### 4c. Interactive demos ✅
 - HTTP/MJPEG interactive demos for RoboTwin + RoboCasa (mirror fastwam `demo_interactive_*`),
-  real-time variants where latency allows.
+  real-time variants included. Both sims: sync + RT SMOKE PASS through the X-WAM `Policy` seam
+  (RoboTwin via `robotwin_xwam` EE adapter + additive `action_type` harness plumb).
 
 ## Phase 5 — Stabilize, document, PR
 - `docs/`: `UPSTREAM_PIN.commit.txt`, `RYZER_REPRODUCTION`, `PORT_SUMMARY`, `RUNTIME_OPTIMIZATION.md`.
@@ -95,8 +97,8 @@ Goal: image builds; the **full X-WAM model** loads on ROCm torch and runs one fo
 - Branch name **`wam-XWAM`** off `benchmark` OK, or prefer a differently-named spinoff?
 
 ## Risks / watch-items
-- Strix Halo is shared — check `docker ps` before builds; wait for free GPU (rule 10).
-- SSH via xsjtema01 tunnel can drop — if lost, ask dev to re-establish, then resume.
+- The Strix Halo target is shared — check `docker ps` before builds; wait for a free GPU (rule 10).
+- The remote SSH connection can drop — if lost, ask the dev to re-establish it, then resume.
 - 5B video DiT + depth branch footprint on unified memory; bf16 inference.
 - flash-attn 2.8.3 has no gfx1151 build → must fall back to SDPA/AOTriton; validate at smoke time.
 - RoboCasa/robosuite is a fresh port: MuJoCo/EGL headless render on gfx1151, asset download, numpy pinning.
