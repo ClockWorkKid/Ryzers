@@ -1,0 +1,6 @@
+suite,teacher_pc,teacher_n,student_pc,student_n,ft_pc,ft_n,ft_vs_student,ft_vs_teacher
+Spatial,100.0,25,100.0,25,100.0,25,+0.0,+0.0
+Object,100.0,25,96.0,25,100.0,25,+4.0,+0.0
+Goal,100.0,25,92.0,25,92.0,25,+0.0,-8.0
+Long,100.0,25,88.0,25,88.0,25,+0.0,-12.0
+Overall,100.0,100,94.0,100,95.0,100,+1.0,-5.0

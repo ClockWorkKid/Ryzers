@@ -1,0 +1,118 @@
+# M2 smoke: tiny 1-GPU distillation run to prove the loop (loss descends + ckpt saves).
+# Thin subset of distill_hybrid.yaml: stride-thinned frames, 2 epochs, frequent logging.
+
+dependencies:
+  - name: 'distill.register'
+
+datasets:
+  &train_set libero/train: !import_call
+    key: 'distill.data.LiberoFrameDataset'
+    init:
+      kwargs:
+        train: True
+        repo_id: &repo 'allenai/MolmoAct2-LIBERO-Dataset'
+        checkpoint_path: &ckpt 'allenai/MolmoAct2-LIBERO'
+        patchify_mode: 'processor'
+        subsample_stride: 200      # ~2.7k frames (both cameras) -> quick pass
+        cache_files: 3
+  &val_set libero/val: !import_call
+    key: 'distill.data.LiberoFrameDataset'
+    init:
+      kwargs:
+        train: False
+        repo_id: *repo
+        checkpoint_path: *ckpt
+        patchify_mode: 'processor'
+        subsample_stride: 50
+        max_frames: 128
+
+models:
+  teacher_model:
+    key: 'molmoact2_seam_teacher'
+    kwargs:
+      checkpoint_path: *ckpt
+      model_dtype: 'bfloat16'
+      already_normalized: True
+    src_ckpt:
+  student_model:
+    key: 'vit_distill_student'
+    kwargs:
+      variant: 'hybrid'
+      dim: 256
+      num_conv_blocks: 4
+      num_attn_blocks: 3
+      attn_heads: 8
+    src_ckpt:
+    dst_ckpt: './resource/ckpt/vit_distill/smoke_hybrid.pt'
+
+train:
+  log_freq: 10
+  num_epochs: 2
+  train_data_loader:
+    dataset_id: *train_set
+    sampler:
+      class_or_func: !import_get
+        key: 'torch.utils.data.RandomSampler'
+      kwargs:
+    kwargs:
+      batch_size: 8
+      num_workers: 8
+      pin_memory: True
+      drop_last: True
+  val_data_loader:
+    dataset_id: *val_set
+    sampler: &val_sampler
+      class_or_func: !import_get
+        key: 'torch.utils.data.SequentialSampler'
+      kwargs:
+    kwargs:
+      batch_size: 8
+      num_workers: 4
+      pin_memory: True
+      drop_last: False
+  teacher:
+    forward_proc: 'forward_batch_only'
+    sequential: []
+    wrapper:
+    requires_grad: False
+  student:
+    forward_proc: 'forward_batch_only'
+    adaptations:
+    sequential: []
+    frozen_modules: []
+    wrapper:
+    requires_grad: True
+  optimizer:
+    key: 'AdamW'
+    kwargs:
+      lr: 0.0006
+      weight_decay: 0.05
+  scheduler:
+    key: 'CosineAnnealingLR'
+    kwargs:
+      T_max: 2
+  criterion:
+    key: 'WeightedSumLoss'
+    kwargs:
+      sub_terms:
+        seam:
+          criterion:
+            key: 'seam_distill'
+            kwargs:
+              student_module_path: '.'
+              student_module_io: 'output'
+              teacher_module_path: '.'
+              teacher_module_io: 'output'
+              cosine_weight: 1.0
+              norm_mse_weight: 1.0
+          weight: 1.0
+
+test:
+  test_data_loader:
+    dataset_id: *val_set
+    sampler: *val_sampler
+    kwargs:
+      batch_size: 8
+      num_workers: 4
+      pin_memory: True
+      drop_last: False

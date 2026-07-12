@@ -1,0 +1,79 @@
+# MolmoAct2 vision-encoder DISTILLATION + closed-loop LIBERO image
+# Instinct MI355X (gfx950 / CDNA4). Clean, self-contained ROCm 7.2 build — NO
+# roi_overlay / resume_patch / self-distill remnants from the prior run.
+# Covers M0.5-M5: torchdistill distillation, frozen MolmoAct2 teacher, LIBERO
+# closed-loop eval. Training loop is torchdistill; our code is a thin package.
+#
+#   DOCKER_BUILDKIT=1 docker build -t molmoact2-vitdistill:rocm950 \
+#       -f docker/Dockerfile.instinct-gfx950 .
+#
+# Base is an official ROCm 7.2.x PyTorch release (supports gfx950 CDNA4 + gfx942);
+# do NOT fall back to an older cached base.
+FROM rocm/pytorch:rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.9.1
+SHELL ["/bin/bash", "-lc"]
+
+ENV DEBIAN_FRONTEND=noninteractive
+ARG LEROBOT_COMMIT=052d329
+# gfx950/gfx942 are compute-only dies (no display EGL) -> OSMesa CPU offscreen render.
+ENV MUJOCO_GL=osmesa PYOPENGL_PLATFORM=osmesa
+ENV TORCH_BLAS_PREFER_HIPBLASLT=0
+
+# --- system deps: ffmpeg (video decode), GL/OSMesa (sim offscreen), build tools ---
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git ffmpeg pkg-config cmake build-essential \
+      libavformat-dev libavcodec-dev libavdevice-dev libavutil-dev \
+      libavfilter-dev libswscale-dev libswresample-dev \
+      libegl-dev libgles-dev libosmesa6-dev libglew-dev \
+      libgl1 libglfw3 libglib2.0-0 libosmesa6 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir ninja
+
+# Pin the ROCm torch trio by PUBLIC version so pip never swaps in CUDA wheels while
+# resolving transformers/lerobot/robosuite/mujoco.
+RUN set -e; \
+    python -c "import torch;print('torch=='+torch.__version__.split('+')[0])"  > /tmp/torch-con.txt; \
+    python -c "import torchvision;print('torchvision=='+torchvision.__version__.split('+')[0])" >> /tmp/torch-con.txt 2>/dev/null || true; \
+    python -c "import torchaudio;print('torchaudio=='+torchaudio.__version__.split('+')[0])"     >> /tmp/torch-con.txt 2>/dev/null || true; \
+    echo "=== torch constraint ==="; cat /tmp/torch-con.txt
+
+# --- clean lerobot (molmoact2 policy) for LIBERO dataset reads + closed-loop ---
+RUN set -e; git clone https://github.com/huggingface/lerobot.git /opt/lerobot; \
+    cd /opt/lerobot && git checkout ${LEROBOT_COMMIT}; \
+    PIP_CONSTRAINT=/tmp/torch-con.txt pip install --no-cache-dir -e ".[molmoact2]" \
+      "datasets>=4.7.0,<5.0.0" "pandas>=2.0.0,<3.0.0" "pyarrow>=21.0.0,<30.0.0" \
+      "av>=12,<14" "accelerate>=1.14,<2.0"
+
+# pypi `cmake` (a lerobot dep, v4.x) installs a /opt/venv/bin/cmake console script
+# that does `from cmake import cmake`. Under egl_probe's ISOLATED build that module
+# is not on sys.path, so the script exits 1 and egl_probe's `cmake --version` check
+# fails. Delete the script so `cmake` resolves to apt's real /usr/bin/cmake binary
+# (3.28.x) for the egl_probe/hf-egl-probe C++ builds. The cmake python module stays.
+RUN set -e; PYBIN="$(dirname "$(command -v python)")"; \
+    rm -f "$PYBIN/cmake" "$PYBIN/ctest" "$PYBIN/cpack"; hash -r 2>/dev/null || true; \
+    echo "build cmake -> $(command -v cmake)"; cmake --version | head -1
+
+# --- LIBERO simulator (robosuite + mujoco + bddl) via lerobot's libero extra ---
+RUN PIP_CONSTRAINT=/tmp/torch-con.txt pip install --no-cache-dir -e "/opt/lerobot[libero]"
+
+# --- distillation engine + teacher/plot deps (after lerobot so transformers pin stays) ---
+RUN PIP_CONSTRAINT=/tmp/torch-con.txt pip install --no-cache-dir torchdistill matplotlib
+
+# LIBERO's first import runs an interactive prompt; feed "N" to write default config.
+RUN printf 'N\n' | python -c "import libero.libero" 2>/dev/null || true
+# robosuite: create private macros; make /tmp world-writable and drop the root-owned
+# log so the non-root runtime user can write its own.
+RUN python -c "import robosuite,os,subprocess,sys; d=os.path.dirname(robosuite.__file__); subprocess.run([sys.executable, os.path.join(d,'scripts','setup_macros.py')])" 2>/dev/null || true; \
+    rm -f /tmp/robosuite.log; chmod 1777 /tmp
+
+# --- our clean distillation package ---
+COPY distill /opt/vit_distill/distill
+COPY configs /opt/vit_distill/configs
+COPY train.py /opt/vit_distill/train.py
+COPY README.md /opt/vit_distill/README.md
+COPY docker/build_sanity.py /opt/vit_distill/docker/build_sanity.py
+ENV PYTHONPATH=/opt/vit_distill
+RUN chmod -R a+rX /opt/vit_distill
+
+# --- build-time sanity (no GPU at build): torch stays ROCm; registries + sim import ---
+RUN python /opt/vit_distill/docker/build_sanity.py
