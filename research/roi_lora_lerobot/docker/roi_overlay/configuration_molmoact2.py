@@ -128,6 +128,34 @@ class MolmoAct2Config(PreTrainedConfig):
     roi_teacher_debias: bool = True             # subtract per-layer batch-mean (positional sink) template
     roi_distill_weight: float = 1.0             # weight of the gate<-teacher distillation loss (variants B/C)
 
+    # FastV-style in-LLM pruning. After `roi_fastv_layer` (L0) decoder layers run on
+    # the FULL pooled grid, drop the lowest-importance image tokens (importance =
+    # action-expert cross-attention teacher, reused from the gate_distill pass) so all
+    # deeper VLM layers AND the action expert's per-layer cross-attention operate on
+    # only `roi_fastv_keep_frac` of image tokens. The full grid still ENTERS the LLM
+    # (input interface unchanged -> avoids the sparse-grid OOD collapse of group-drop).
+    roi_fastv_enable: bool = False
+    roi_fastv_layer: int = 3                     # L0: #decoder layers on full seq before the cut
+    roi_fastv_keep_frac: float = 1.0            # fraction of image tokens kept after L0
+    roi_unfreeze_last_decoder: int = 0          # full-FT the last N VLM decoder layers (FastV capacity)
+    # Keep-fraction curriculum: anneal the FastV keep fraction linearly from
+    # `roi_curriculum_start` -> `roi_fastv_keep_frac` over `roi_curriculum_steps`
+    # forward passes (0 disables; keep_frac held constant at roi_fastv_keep_frac).
+    roi_curriculum_steps: int = 0
+    roi_curriculum_start: float = 0.9
+
+    # Predictive / temporal gating (select="gate_predict"). Causal design: the ROI
+    # gate that prunes the CURRENT frame's ViT is a function of a PAST frame
+    # (`roi_predict_horizon` frames earlier), and is supervised by the action-expert
+    # attention teacher computed on the CURRENT frame. At inference this lets the gate
+    # predicted at step t-H drive the single-pass pruning of step t (no teacher, no
+    # dual pass) -- both student and planner stay causally grounded. 0 disables the
+    # temporal shift (gate reads the same frame it prunes, i.e. non-causal debug).
+    # H is measured in dataset frames; the natural value is the planner replan stride
+    # (n_action_steps). A separate past-frame observation is loaded via
+    # `observation_delta_indices` = [-roi_predict_horizon, 0] when enabled.
+    roi_predict_horizon: int = 0
+
     optimizer_betas: tuple[float, float] = (0.9, 0.95)
     optimizer_eps: float = 1e-6
     optimizer_weight_decay: float = 0.0
@@ -191,6 +219,32 @@ class MolmoAct2Config(PreTrainedConfig):
             raise ValueError(
                 f"roi_prune_keep_frac must be in (0, 1], got {self.roi_prune_keep_frac}."
             )
+        if not 0.0 < self.roi_fastv_keep_frac <= 1.0:
+            raise ValueError(
+                f"roi_fastv_keep_frac must be in (0, 1], got {self.roi_fastv_keep_frac}."
+            )
+        if self.roi_fastv_layer < 0:
+            raise ValueError(f"roi_fastv_layer must be >= 0, got {self.roi_fastv_layer}.")
+        if self.roi_unfreeze_last_decoder < 0:
+            raise ValueError(
+                f"roi_unfreeze_last_decoder must be >= 0, got {self.roi_unfreeze_last_decoder}."
+            )
+        if self.roi_predict_horizon < 0:
+            raise ValueError(
+                f"roi_predict_horizon must be >= 0, got {self.roi_predict_horizon}."
+            )
+        if self.roi_predict_horizon > 0 and self.roi_prune_select != "gate_predict":
+            raise ValueError(
+                "roi_predict_horizon > 0 is only valid with roi_prune_select='gate_predict' "
+                f"(got {self.roi_prune_select!r})."
+            )
+        if self.roi_fastv_enable and self.roi_prune_select not in {
+            "actionattn", "gate_distill", "gate_predict",
+        }:
+            raise ValueError(
+                "roi_fastv_enable requires an action-attention teacher "
+                "(roi_prune_select in {'actionattn','gate_distill','gate_predict'})."
+            )
         # The action-attention teacher runs a full no-grad forward before the trained
         # pass; gradient-checkpoint recompute of the trained pass then trips torch's
         # metadata check. MI300X has ample memory, so disable checkpointing for these
@@ -250,7 +304,14 @@ class MolmoAct2Config(PreTrainedConfig):
             raise ValueError(f"max_sequence_length must be >= 1 or None, got {self.max_sequence_length}.")
 
     @property
-    def observation_delta_indices(self) -> None:
+    def observation_delta_indices(self) -> list[int] | None:
+        # Causal predictive gating: additionally load the frame `roi_predict_horizon`
+        # steps in the PAST as the gate source. LeRobot stacks each observation key
+        # over these relative frame indices (time dim, index 0 = past, index 1 =
+        # current) and emits a `<key>_is_pad` mask for indices that fall before the
+        # episode start, which the predict loss masks out. Disabled -> single frame.
+        if self.roi_prune_select == "gate_predict" and self.roi_predict_horizon > 0:
+            return [-int(self.roi_predict_horizon), 0]
         return None
 
     @property

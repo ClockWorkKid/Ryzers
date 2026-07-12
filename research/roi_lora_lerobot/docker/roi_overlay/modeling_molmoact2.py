@@ -595,12 +595,17 @@ class MolmoAct2Policy(PreTrainedPolicy):
             self._freeze_non_action_expert_parameters()
         if self.config.gradient_checkpointing:
             self._enable_gradient_checkpointing()
+        if int(getattr(self.config, "roi_unfreeze_last_decoder", 0)) > 0:
+            self._unfreeze_last_decoder_layers(int(self.config.roi_unfreeze_last_decoder))
         self.train(self.training)
 
     def reset(self) -> None:
         """Clear the action queue and rollout generator between episodes."""
         self._action_queue = deque(maxlen=self.config.n_action_steps)
         self._rollout_action_generator = None
+        # Causal predictive gating: drop the gate keep-set carried from the previous
+        # episode's last replan so a new episode's first frame prunes on its own gate.
+        self._roi_pred_prev_keep_idx = None
 
     def _set_inference_cuda_graph_enabled(self, enabled: bool) -> None:
         if not hasattr(self, "model"):
@@ -669,6 +674,134 @@ class MolmoAct2Policy(PreTrainedPolicy):
                 trainable_params += param.numel()
         if trainable_params == 0:
             raise RuntimeError("enable_lora_vlm=true, but no action_expert parameters were found.")
+
+    def _unfreeze_last_decoder_layers(self, n: int) -> None:
+        """Full-FT the last `n` VLM decoder blocks (extra capacity so the model can
+        adapt to operating on the FastV-pruned token set in its deep layers). These
+        params land in the `vlm_params` optimizer group via requires_grad."""
+        transformer = getattr(self._backbone(), "transformer", None)
+        blocks = getattr(transformer, "blocks", None) if transformer is not None else None
+        if blocks is None:
+            raise RuntimeError("roi_unfreeze_last_decoder>0 but MolmoAct2 exposes no transformer.blocks.")
+        total = len(blocks)
+        n = min(int(n), total)
+        unfrozen = 0
+        for blk in list(blocks)[-n:]:
+            for param in blk.parameters():
+                param.requires_grad_(True)
+                unfrozen += param.numel()
+        print(
+            f"[roi-fastv] unfroze last {n}/{total} decoder layers ({unfrozen / 1e6:.1f}M params)",
+            flush=True,
+        )
+
+    def _current_fastv_keep(self) -> float:
+        """Curriculum-annealed FastV keep fraction: linearly interpolate from
+        `roi_curriculum_start` down to `roi_fastv_keep_frac` over `roi_curriculum_steps`
+        forward passes. Returns `roi_fastv_keep_frac` when the curriculum is disabled."""
+        end = float(self.config.roi_fastv_keep_frac)
+        steps = int(getattr(self.config, "roi_curriculum_steps", 0))
+        if steps <= 0:
+            return end
+        start = float(getattr(self.config, "roi_curriculum_start", end))
+        t = min(1.0, max(0, int(getattr(self, "_roi_step", 0))) / float(steps))
+        return start + (end - start) * t
+
+    def _fastv_col_idx_from_keep(self, model_inputs: dict[str, Tensor], keep_over: Tensor):
+        """Build the per-example column index [B, s_new] that keeps every non-image
+        column plus the surviving image placeholders (as marked by `keep_over`, a bool
+        over image placeholders in batch-major/in-sequence order). Mirrors
+        `_apply_group_drop_to_inputs` but does NOT modify the inputs -- the full grid
+        still enters the LLM; the reduction happens mid-forward at layer L0. Returns
+        None if the batch is ragged (kept-per-example not uniform)."""
+        input_ids = model_inputs.get("input_ids")
+        img_id = self._resolve_image_patch_id()
+        if input_ids is None or img_id is None:
+            return None
+        B, S = input_ids.shape
+        is_img = input_ids == int(img_id)
+        counts = is_img.sum(dim=1)
+        n_tok = int(counts[0].item()) if counts.numel() else 0
+        if n_tok == 0 or not bool((counts == n_tok).all()):
+            return None
+        if int(keep_over.numel()) != B * n_tok:
+            return None
+        keep_bt = keep_over.reshape(B, n_tok).to(device=input_ids.device)
+        if not bool((keep_bt.sum(dim=1) == int(keep_bt[0].sum())).all()):
+            return None  # kept-per-example must be uniform to keep a rectangular batch
+        keep_cols = torch.ones(B, S, dtype=torch.bool, device=input_ids.device)
+        keep_cols[is_img] = keep_bt.reshape(-1)
+        idx = torch.stack(
+            [keep_cols[b].nonzero(as_tuple=False).flatten() for b in range(B)], dim=0
+        )  # [B, s_new]
+        return idx
+
+    def _fastv_reduce(
+        self,
+        idx: Tensor,
+        hidden: Tensor,
+        position_ids: Tensor,
+        cache_position: Tensor,
+        encoder_attention_mask: Tensor | None,
+        model_inputs: dict[str, Tensor],
+        transformer,
+        action_expert,
+        batch_size: int,
+        num_flow_timesteps: int,
+        dtype,
+    ):
+        """Reduce the VLM sequence to the FastV-kept columns and rebuild every
+        seq-dependent tensor the deeper layers + action-expert cross-attention consume:
+        hidden states, position ids (ORIGINAL positions kept -> RoPE geometry preserved),
+        causal mask, cross-attention mask, rotary embeddings, cache positions."""
+        B, S, D = hidden.shape
+        s_new = int(idx.shape[1])
+        hidden_r = hidden.gather(1, idx.unsqueeze(-1).expand(B, s_new, D))
+        if os.environ.get("ROI_PRUNE_DEBUG") and not getattr(self, "_roi_fastv_dbg", False):
+            self._roi_fastv_dbg = True
+            print(
+                f"[roi-fastv] in-LLM cut @L0={int(self.config.roi_fastv_layer)} | "
+                f"seq {S}->{s_new} | keep~{self._current_fastv_keep():.2f}",
+                flush=True,
+            )
+
+        if torch.is_tensor(position_ids) and position_ids.dim() == 2 and position_ids.shape[0] == B:
+            pid_r = position_ids.gather(1, idx)
+        else:
+            pid_full = torch.as_tensor(position_ids, device=hidden.device).reshape(1, -1).expand(B, S)
+            pid_r = pid_full.gather(1, idx)
+
+        cache_r = torch.arange(s_new, device=hidden.device)
+
+        am = model_inputs.get("attention_mask")
+        am_r = am.gather(1, idx) if (torch.is_tensor(am) and am.dim() == 2 and am.shape[1] == S) else None
+        tt = model_inputs.get("token_type_ids")
+        tt_r = tt.gather(1, idx) if (torch.is_tensor(tt) and tt.dim() == 2 and tt.shape[1] == S) else None
+        backbone = self._backbone()
+        causal_r = backbone._build_native_attention_bias(
+            inputs_embeds=hidden_r, attention_mask=am_r, token_type_ids=tt_r, past_key_values=None
+        )
+
+        enc_r = encoder_attention_mask
+        if (
+            torch.is_tensor(encoder_attention_mask)
+            and encoder_attention_mask.dim() == 2
+            and encoder_attention_mask.shape[1] == S
+        ):
+            enc_r = encoder_attention_mask.gather(1, idx)
+        cross_r = action_expert._build_cross_attention_mask(enc_r, batch_size, dtype)
+        cross_r = _expand_mask(cross_r, num_flow_timesteps)
+
+        pe = None
+        pem = None
+        if transformer.config.rope_scaling_layers is not None:
+            pem = {
+                "default": transformer.rotary_embs["default"](hidden_r, pid_r),
+                "scaling": transformer.rotary_embs["scaling"](hidden_r, pid_r),
+            }
+        else:
+            pe = transformer.rotary_emb(hidden_r, pid_r)
+        return hidden_r, pid_r, causal_r, cache_r, cross_r, pe, pem
 
     def train(self, mode: bool = True):
         super().train(mode)
@@ -1257,7 +1390,55 @@ class MolmoAct2Policy(PreTrainedPolicy):
                 next_action_hidden = next_action_hidden * valid_action
             return next_hidden, next_action_hidden
 
+        # FastV: drop the low-importance image columns AFTER layer L0 so every deeper
+        # layer -- and the action expert's per-layer cross-attention -- runs on the
+        # reduced set. `_roi_fastv_col_idx` is consumed here (cleared) so a later pass
+        # can't reuse a stale index. Requires the rebuildable (tensor) causal-mask path.
+        _fastv_idx = getattr(self, "_roi_fastv_col_idx", None)
+        self._roi_fastv_col_idx = None
+        _fastv_L0 = (
+            int(self.config.roi_fastv_layer)
+            if (
+                self.config.roi_fastv_enable
+                and _fastv_idx is not None
+                and not getattr(self, "_roi_fastv_force_off", False)
+            )
+            else -1
+        )
+        if _fastv_L0 >= int(transformer.config.num_hidden_layers) or isinstance(causal_mask_mapping, dict):
+            _fastv_L0 = -1
         for layer_idx in range(int(transformer.config.num_hidden_layers)):
+            if _fastv_L0 >= 0 and layer_idx == _fastv_L0:
+                (
+                    hidden_states,
+                    position_ids,
+                    causal_mask_mapping,
+                    cache_position,
+                    cross_mask,
+                    _fastv_pe,
+                    _fastv_pem,
+                ) = self._fastv_reduce(
+                    _fastv_idx,
+                    hidden_states,
+                    position_ids,
+                    cache_position,
+                    encoder_attention_mask,
+                    model_inputs,
+                    transformer,
+                    action_expert,
+                    batch_size,
+                    num_flow_timesteps,
+                    actions.dtype,
+                )
+                if transformer.config.rope_scaling_layers is not None:
+                    position_embeddings_mapping = _fastv_pem
+                else:
+                    position_embeddings = _fastv_pe
+                # Discrete loss (action_mode='both') reads the (now shortened)
+                # last_hidden_state; reuse the group-drop realignment so `labels` are
+                # gathered to the same kept columns. All dropped columns are <image>
+                # placeholders (label == ignore_index), so no action-token label is lost.
+                self._roi_gd_col_idx = _fastv_idx
             if use_gradient_checkpointing:
                 hidden_states, action_hidden = torch.utils.checkpoint.checkpoint(
                     lambda layer_hidden, layer_action_hidden, idx=layer_idx: run_layer(
@@ -1499,6 +1680,79 @@ class MolmoAct2Policy(PreTrainedPolicy):
             "batch": B,
         }
         return scores, num_crops, num_patches
+
+    def _roi_predict_gate_scores(
+        self, batch: dict[str, Tensor], model_inputs: dict[str, Tensor]
+    ) -> tuple[Tensor | None, Tensor | None]:
+        """Causal predictive gate: score the ROI gate on the PAST frame
+        (`past_pixel_values`, `roi_predict_horizon` steps earlier) so its top-K can
+        prune the CURRENT frame's ViT. The keep-set is therefore a function of the
+        past observation only -- no look-ahead -- which is exactly what the inference
+        loop can supply (the gate predicted at t-H drives the single-pass prune at t).
+
+        Returns (scores [n_images, num_patches] or None, valid [n_images] bool or
+        None). `valid` is False for images whose past frame was padded at an episode
+        boundary (LeRobot repeats the boundary frame + sets `*_is_pad`); the predict
+        loss masks those rows so the gate is never supervised on a non-causal pair.
+        Row order matches `_action_teacher_patch_scores` (image = b*num_crops+crop).
+        """
+        backbone = self._backbone()
+        vb = getattr(backbone, "vision_backbone", None)
+        if vb is None or not hasattr(vb, "roi_gate_scores_at_seam"):
+            return None, None
+        past = batch.get("past_pixel_values")
+        if past is None or not torch.is_tensor(past):
+            return None, None
+        try:
+            device = next(vb.parameters()).device
+        except StopIteration:
+            device = past.device
+        past = past.to(device=device)
+        compute_dtype = _torch_dtype(self.config.model_dtype)
+        if past.is_floating_point():
+            past = past.to(dtype=compute_dtype)
+        # `past_pixel_values` arrives flat [total_crops, n_patches, pixels] (exactly
+        # the layout of `pixel_values`). Rebuild the padded 4D grid
+        # [B, num_crops, n_patches, pixels] with the CURRENT frame's image metadata --
+        # the past frame shares the identical crop tiling -- so the seam gate scores
+        # the same per-image grid it will at causal inference.
+        if past.dim() == 3:
+            try:
+                past, _ = backbone.build_batched_images(
+                    input_ids=model_inputs.get("input_ids"),
+                    pixel_values=past,
+                    image_token_pooling=model_inputs.get("image_token_pooling"),
+                    image_grids=model_inputs.get("image_grids"),
+                    image_num_crops=model_inputs.get("image_num_crops"),
+                )
+            except Exception:
+                return None, None
+        if not torch.is_tensor(past) or past.dim() != 4:
+            return None, None
+        B, num_crops = int(past.shape[0]), int(past.shape[1])
+
+        # Reuse the pooled instruction tokens already stashed for encode_image so the
+        # predicted keep-set is conditioned on the same task context as training.
+        task_img = None
+        task_tokens = getattr(vb, "roi_task_tokens", None)
+        task_mask = getattr(vb, "roi_task_mask", None)
+        if task_tokens is not None and int(task_tokens.shape[0]) == B:
+            tok = task_tokens.to(device=past.device).repeat_interleave(num_crops, dim=0)
+            msk = (
+                task_mask.to(device=past.device).repeat_interleave(num_crops, dim=0)
+                if task_mask is not None
+                else None
+            )
+            task_img = (tok, msk)
+
+        scores = vb.roi_gate_scores_at_seam(past, task_img=task_img)  # [B*num_crops, N]
+
+        valid = None
+        is_pad = batch.get("past_pixel_values_is_pad")
+        if is_pad is not None and torch.is_tensor(is_pad):
+            v = (~is_pad.to(dtype=torch.bool)).reshape(B)
+            valid = v.repeat_interleave(num_crops).to(device=scores.device)
+        return scores, valid
 
     def _compute_action_attention_keep_idx(
         self, batch: dict[str, Tensor], model_inputs: dict[str, Tensor]
@@ -2005,6 +2259,266 @@ class MolmoAct2Policy(PreTrainedPolicy):
 
         return trajectory
 
+    # ------------------------------------------------------------------ #
+    # FastV in-LLM pruning at INFERENCE (eval parity with training).       #
+    # Opt-in via ROI_FASTV_INFER=1. Default off -> stock (gate-only) path, #
+    # so training and existing eval are byte-for-byte unaffected.          #
+    # ------------------------------------------------------------------ #
+    def _fastv_infer_enabled(self) -> bool:
+        if not bool(getattr(self.config, "roi_fastv_enable", False)):
+            return False
+        return bool(int(os.environ.get("ROI_FASTV_INFER", "0") or "0"))
+
+    def _set_gate_task_tokens(self, model_inputs: dict[str, Tensor]) -> None:
+        """Feed the ROI gate the same pooled-instruction conditioning it saw in
+        training so the eval keep-set matches. No-op when the gate is task-free."""
+        vb = getattr(self._backbone(), "vision_backbone", None)
+        cfg = getattr(vb, "roi_cfg", None) if vb is not None else None
+        if (
+            cfg is not None
+            and getattr(cfg, "enable", False)
+            and getattr(cfg, "uses_gate", False)
+            and getattr(vb, "roi_task_dim", None)
+        ):
+            _tt = self._compute_task_tokens(model_inputs)
+            vb.roi_task_tokens = _tt[0] if _tt is not None else None
+            vb.roi_task_mask = _tt[1] if _tt is not None else None
+
+    def _fastv_group_ctx_from_gate(self, model_inputs: dict[str, Tensor]) -> bool:
+        """Build `_roi_group_ctx` (per-pooled-token importance) from the ROI gate's
+        per-patch scores captured during the ViT encode, so the training-time
+        `_teacher_group_drop` -> `_fastv_col_idx_from_keep` path can drive the in-LLM
+        FastV cut at inference (no action-attention teacher is run at eval). Mirrors
+        `_action_teacher_patch_scores`'s pooled-token layout. Returns True on success."""
+        self._roi_group_ctx = None
+        vb = getattr(self._backbone(), "vision_backbone", None)
+        gate_scores = getattr(vb, "roi_last_gate_scores", None) if vb is not None else None
+        num_patches = getattr(vb, "roi_last_num_patches", None) if vb is not None else None
+        input_ids = model_inputs.get("input_ids")
+        ppi = model_inputs.get("image_token_pooling")
+        if gate_scores is None or num_patches is None or input_ids is None or ppi is None:
+            return False
+        img_id = self._resolve_image_patch_id()
+        if img_id is None:
+            return False
+        gate_scores = gate_scores.float()                       # [n_images, num_patches]
+        num_patches = int(num_patches)
+        B, _S = input_ids.shape
+        img_mask = input_ids == int(img_id)
+        counts = img_mask.sum(dim=1)
+        n_tok = int(counts[0].item()) if counts.numel() else 0
+        if n_tok == 0 or not bool((counts == n_tok).all()):
+            return False
+        n_images = int(gate_scores.shape[0])
+        num_crops = max(1, n_images // B)
+        if num_crops * B != n_images:
+            return False
+        tpc = max(1, n_tok // num_crops)
+        device = gate_scores.device
+        pool = ppi.shape[-1]
+        rows = ppi.reshape(B, n_tok, pool).to(device)
+        token_crop = (torch.arange(n_tok, device=device) // tpc).clamp_max(num_crops - 1)
+        crop_idx = token_crop.view(1, n_tok, 1).expand(B, n_tok, pool)
+        b_idx = torch.arange(B, device=device).view(B, 1, 1).expand(B, n_tok, pool)
+        global_img = b_idx * num_crops + crop_idx
+        local = rows % num_patches
+        valid = rows >= 0
+        target = (global_img * num_patches + local).clamp_min(0)
+        gate_flat = gate_scores.reshape(-1)                     # [n_images*num_patches]
+        gathered = gate_flat[target.reshape(-1)].reshape(B, n_tok, pool)
+        gathered = torch.where(valid, gathered, torch.zeros_like(gathered))
+        denom = valid.sum(-1).clamp_min(1).to(gathered.dtype)
+        tok_all = gathered.sum(-1) / denom                     # [B, n_tok]
+        self._roi_group_ctx = {
+            "tok_all": tok_all,
+            "ppi": ppi,
+            "token_crop": token_crop,
+            "tpc": tpc,
+            "n_tok": n_tok,
+            "num_crops": num_crops,
+            "batch": B,
+        }
+        return True
+
+    def _generate_actions_fastv(
+        self,
+        *,
+        model_inputs: dict[str, Tensor],
+        action_dim_is_pad: Tensor | None,
+        num_steps: int | None,
+        generator: torch.Generator | None,
+    ) -> Tensor:
+        """Continuous flow-matching generation with the FastV in-LLM cut applied at eval
+        (matches training): run decoder layers 0..L0 on the full sequence, drop the
+        low-importance image columns (ranked by the distilled gate), then run the deeper
+        layers + per-layer action cross-attention on the reduced set. Falls back to the
+        stock backbone path whenever the cut cannot be applied safely."""
+        backbone = self._backbone()
+        transformer = getattr(backbone, "transformer", None)
+        action_expert = backbone._require_action_expert()
+
+        def _stock() -> Tensor:
+            return backbone.generate_actions_from_inputs(
+                **model_inputs,
+                action_dim_is_pad=action_dim_is_pad,
+                action_horizon=self._generation_action_horizon(),
+                num_steps=num_steps,
+                generator=generator,
+            )
+
+        # Depth-gating scales KV by a full-length token mask; it is incompatible with the
+        # per-layer variable-length KV the cut produces. It is off for these runs, but
+        # guard anyway so a depth-gated checkpoint stays correct (gate-only) instead of
+        # silently wrong.
+        if (
+            transformer is None
+            or getattr(backbone, "action_expert_depth_gate", None) is not None
+            or len(action_expert.blocks) != int(transformer.config.num_hidden_layers)
+        ):
+            return _stock()
+
+        hidden_states, causal_mask_mapping, position_ids, cache_position = (
+            self._prepare_joint_training_backbone_inputs(model_inputs)
+        )
+        device = hidden_states.device
+        dtype = hidden_states.dtype
+        batch_size = int(hidden_states.shape[0])
+
+        # Build the FastV keep-set from the gate (single-pass, no teacher at eval).
+        _fk = float(self.config.roi_fastv_keep_frac)
+        col_idx = None
+        if (
+            batch_size == 1
+            and _fk < 1.0
+            and not isinstance(causal_mask_mapping, dict)
+            and int(self.config.roi_fastv_layer) < int(transformer.config.num_hidden_layers)
+            and self._fastv_group_ctx_from_gate(model_inputs)
+        ):
+            _gd = self._teacher_group_drop(_fk)
+            if _gd is not None:
+                _, keep_over = _gd
+                col_idx = self._fastv_col_idx_from_keep(model_inputs, keep_over)
+        self._roi_group_ctx = None
+        if col_idx is None:
+            return _stock()  # nothing to cut -> equivalent to gate-only
+
+        if transformer.config.rope_scaling_layers is not None:
+            position_embeddings_mapping = {
+                "default": transformer.rotary_embs["default"](hidden_states, position_ids),
+                "scaling": transformer.rotary_embs["scaling"](hidden_states, position_ids),
+            }
+            position_embeddings = None
+        else:
+            position_embeddings_mapping = None
+            position_embeddings = transformer.rotary_emb(hidden_states, position_ids)
+
+        _fastv_L0 = int(self.config.roi_fastv_layer)
+        encoder_kv_states: list[tuple[Tensor, Tensor]] = []
+        for layer_idx in range(int(transformer.config.num_hidden_layers)):
+            if layer_idx == _fastv_L0:
+                (
+                    hidden_states,
+                    position_ids,
+                    causal_mask_mapping,
+                    cache_position,
+                    _cross_r,
+                    _pe,
+                    _pem,
+                ) = self._fastv_reduce(
+                    col_idx,
+                    hidden_states,
+                    position_ids,
+                    cache_position,
+                    None,
+                    model_inputs,
+                    transformer,
+                    action_expert,
+                    batch_size,
+                    1,
+                    dtype,
+                )
+                if transformer.config.rope_scaling_layers is not None:
+                    position_embeddings_mapping = _pem
+                else:
+                    position_embeddings = _pe
+            if transformer.config.rope_scaling_layers is not None:
+                position_embeddings_i = (
+                    position_embeddings_mapping["scaling"]
+                    if layer_idx in transformer.config.rope_scaling_layers
+                    else position_embeddings_mapping["default"]
+                )
+            else:
+                position_embeddings_i = position_embeddings
+            layer_outputs = transformer.blocks[layer_idx](
+                hidden_states,
+                position_embeddings=position_embeddings_i,
+                attention_mask=causal_mask_mapping,
+                position_ids=position_ids,
+                past_key_values=None,
+                output_attentions=False,
+                use_cache=False,
+                cache_position=cache_position,
+                collect_layer_kv_states=True,
+            )
+            hidden_states = layer_outputs[0]
+            key_states, value_states = self._decoder_layer_kv_outputs(
+                layer_outputs, output_attentions=False
+            )
+            key_states = backbone._cache_to_sequence(key_states)
+            value_states = backbone._cache_to_sequence(value_states)
+            encoder_kv_states.append((key_states, value_states))
+
+        # Denoise against the per-layer (FastV-reduced) KV. cross_mask is None at eval
+        # (batch=1, no encoder padding), so per-layer KV of differing lengths (full
+        # before L0, reduced after) is handled natively by the cross-attention.
+        horizon = self._generation_action_horizon()
+        max_action_dim = int(backbone.config.max_action_dim)
+        trajectory_dtype = action_expert.action_embed.weight.dtype
+        trajectory = torch.randn(
+            (batch_size, horizon, max_action_dim),
+            device=device,
+            dtype=trajectory_dtype,
+            generator=generator,
+        )
+        if self.config.mask_action_dim_padding:
+            trajectory = _mask_action_dim_tensor(trajectory, action_dim_is_pad)
+        context = action_expert.prepare_context(
+            encoder_kv_states=encoder_kv_states,
+            encoder_attention_mask=None,
+            state_embeddings=None,
+            batch_size=batch_size,
+            seq_len=trajectory.shape[1],
+            device=device,
+            dtype=trajectory.dtype,
+        )
+        steps = int(num_steps or backbone.config.flow_matching_num_steps)
+        if steps <= 0:
+            raise ValueError(f"num_steps must be >= 1, got {steps}.")
+        flow_timesteps = [
+            torch.full((batch_size,), idx / steps, device=device, dtype=torch.float32)
+            for idx in range(steps)
+        ]
+        modulation_cache = action_expert.get_or_prepare_modulation_cache(
+            flow_timesteps,
+            cache_key=(steps, batch_size, device, trajectory.dtype),
+        )
+        dt = 1.0 / steps
+        mask_enabled = bool(self.config.mask_action_dim_padding)
+        for idx in range(steps):
+            step_modulation = modulation_cache[idx]
+            velocity = action_expert.forward_with_context(
+                trajectory,
+                step_modulation.conditioning,
+                context=context,
+                modulation=step_modulation,
+            )
+            if mask_enabled:
+                velocity = _mask_action_dim_tensor(velocity, action_dim_is_pad)
+            trajectory = trajectory + dt * velocity
+            if mask_enabled:
+                trajectory = _mask_action_dim_tensor(trajectory, action_dim_is_pad)
+        return trajectory
+
     def forward(
         self,
         batch: dict[str, Tensor],
@@ -2083,9 +2597,55 @@ class MolmoAct2Policy(PreTrainedPolicy):
                                 _vb.roi_teacher_scores = scores
                 else:
                     keep = _roi_cfg.resolve_keep(num_patches)
-                    _vb.roi_external_keep_idx = scores.topk(keep, dim=1).indices.sort(dim=1).values
                     if _roi_cfg.uses_gate:
+                        # teacher on the CURRENT frame -> BCE target for the gate
                         _vb.roi_teacher_scores = scores
+                    _vb.roi_predicted_gate_scores = None
+                    _vb.roi_predicted_valid = None
+                    if (
+                        _roi_cfg.select == "gate_predict"
+                        and int(getattr(self.config, "roi_predict_horizon", 0)) > 0
+                    ):
+                        # Causal predictive gating: the keep-set that prunes the
+                        # CURRENT frame is the top-K of the gate scored on the PAST
+                        # frame (roi_predict_horizon steps earlier). The teacher above
+                        # only supervises the prediction; it never drives the prune.
+                        pred, valid = self._roi_predict_gate_scores(batch, model_inputs)
+                        if pred is not None and pred.shape == scores.shape:
+                            _vb.roi_predicted_gate_scores = pred
+                            _vb.roi_predicted_valid = valid
+                            _vb.roi_external_keep_idx = (
+                                pred.detach().topk(keep, dim=1).indices.sort(dim=1).values
+                            )
+                        else:
+                            # No usable past frame this step -> fall back to the
+                            # teacher keep-set (non-causal) so the encode still trains;
+                            # the predict loss is skipped (roi_predicted_gate_scores=None).
+                            _vb.roi_external_keep_idx = (
+                                scores.topk(keep, dim=1).indices.sort(dim=1).values
+                            )
+                    else:
+                        _vb.roi_external_keep_idx = scores.topk(keep, dim=1).indices.sort(dim=1).values
+
+        # FastV in-LLM pruning: reuse the teacher's per-pooled-token action-attention
+        # scores (stashed in _roi_group_ctx by the pass above) to mark which image
+        # columns survive the mid-forward cut at layer L0. The full grid still entered
+        # the LLM; only deeper layers + the action-expert cross-attention see the
+        # reduced set. Cleared each step; consumed once in the flow forward.
+        self._roi_fastv_col_idx = None
+        if self.training:
+            self._roi_step = int(getattr(self, "_roi_step", 0)) + 1
+        if (
+            self.config.roi_fastv_enable
+            and self.training
+            and getattr(self, "_roi_group_ctx", None) is not None
+        ):
+            _fk = self._current_fastv_keep()
+            if _fk < 1.0:
+                _gd = self._teacher_group_drop(_fk)
+                if _gd is not None:
+                    _, _fv_keep_over = _gd
+                    self._roi_fastv_col_idx = self._fastv_col_idx_from_keep(model_inputs, _fv_keep_over)
 
         return self._forward_losses(batch, model_inputs, reduction, losses, metrics)
 
@@ -2178,6 +2738,11 @@ class MolmoAct2Policy(PreTrainedPolicy):
             losses.append(distill_loss)
             metrics["roi_distill_loss"] = distill_loss.detach().float().item()
 
+        predict_loss = self._roi_gate_predict_loss()
+        if predict_loss is not None:
+            losses.append(predict_loss)
+            metrics["roi_predict_loss"] = predict_loss.detach().float().item()
+
         loss = torch.stack(losses).sum(dim=0)
         metrics["loss"] = loss.detach().float().mean().item()
         return loss, metrics
@@ -2246,6 +2811,73 @@ class MolmoAct2Policy(PreTrainedPolicy):
                 pass
         return float(getattr(cfg, "distill_weight", 1.0)) * loss
 
+    def _roi_gate_predict_loss(self) -> Tensor | None:
+        """Causal predictive gating (select='gate_predict'): train the gate scored on
+        the PAST frame to reproduce the action-attention teacher's keep-set on the
+        CURRENT frame. Same BCE-ROI-classifier objective as gate_distill, but the
+        logit/target come from DIFFERENT timesteps (t-H vs t), so at inference the
+        gate predicted one step ahead can prune without any teacher / dual pass.
+        Rows whose past frame was padded (episode start) are masked out. Returns None
+        when not applicable."""
+        if not self.training:
+            return None
+        vb = getattr(self._backbone(), "vision_backbone", None)
+        cfg = getattr(vb, "roi_cfg", None) if vb is not None else None
+        if cfg is None or cfg.select != "gate_predict":
+            return None
+        gate_scores = getattr(vb, "roi_predicted_gate_scores", None)
+        teacher_scores = getattr(vb, "roi_teacher_scores", None)
+        valid = getattr(vb, "roi_predicted_valid", None)
+        # consume so a skipped step can't reuse a stale target/logit pair
+        vb.roi_predicted_gate_scores = None
+        vb.roi_teacher_scores = None
+        vb.roi_predicted_valid = None
+        if gate_scores is None or teacher_scores is None:
+            return None
+        if gate_scores.shape != teacher_scores.shape:
+            return None
+        keep = cfg.resolve_keep(teacher_scores.shape[1])
+        with torch.no_grad():
+            target = torch.zeros_like(teacher_scores)
+            target.scatter_(1, teacher_scores.topk(keep, dim=1).indices, 1.0)
+        loss_per = F.binary_cross_entropy_with_logits(
+            gate_scores.float(), target.to(dtype=torch.float32), reduction="none"
+        ).mean(dim=1)  # [n_images]
+        if valid is not None:
+            v = valid.to(device=loss_per.device, dtype=torch.bool)
+            if not bool(v.any()):
+                return None
+            loss = loss_per[v].mean()
+        else:
+            loss = loss_per.mean()
+        _dump = os.environ.get("ROI_DUMP_AGREEMENT")
+        if _dump:
+            with torch.no_grad():
+                gk = gate_scores.topk(keep, dim=1).indices
+                prec = target.gather(1, gk).sum(dim=1).div(float(keep))
+                if valid is not None:
+                    vv = valid.to(device=prec.device, dtype=torch.bool)
+                    prec = prec[vv] if bool(vv.any()) else prec
+                rec = {
+                    "mode": "gate_predict",
+                    "horizon": int(getattr(self.config, "roi_predict_horizon", 0)),
+                    "keep_frac": round(float(cfg.keep_frac), 3),
+                    "n_patches": int(teacher_scores.shape[1]),
+                    "keep_k": int(keep),
+                    "bce": float(loss.item()),
+                    "precision_at_k": float(prec.mean().item()),
+                    "random_baseline": float(keep) / float(teacher_scores.shape[1]),
+                    "n_valid": int(valid.to(dtype=torch.bool).sum().item()) if valid is not None else int(gate_scores.shape[0]),
+                    "batch_images": int(gate_scores.shape[0]),
+                    "gate_scores_requires_grad": bool(gate_scores.requires_grad),
+                }
+            try:
+                with open(_dump, "a") as _fh:
+                    _fh.write(json.dumps(rec) + "\n")
+            except Exception:
+                pass
+        return float(getattr(cfg, "distill_weight", 1.0)) * loss
+
     @torch.no_grad()
     def predict_action_chunk(self, batch: dict[str, Tensor], **kwargs) -> Tensor:
         """Generate an action chunk via continuous flow matching or discrete AR decoding."""
@@ -2255,6 +2887,24 @@ class MolmoAct2Policy(PreTrainedPolicy):
                 "use 'inference_action_mode'."
             )
         model_inputs = self._model_inputs(batch)
+        # Give the ROI gate its instruction conditioning so the eval keep-set matches
+        # training (no-op for a task-free gate). Applies to every inference mode.
+        self._set_gate_task_tokens(model_inputs)
+        # Causal predictive gating (select='gate_predict'): prune THIS replan's ViT with
+        # the keep-set the gate predicted at the PREVIOUS replan (H=n_action_steps frames
+        # earlier, i.e. this observation's past). The gate never sees the frame it prunes.
+        # The first replan of an episode has no carried set -> the gate falls back to the
+        # current frame for that single step (reset() clears the carry between episodes).
+        _causal_vb = None
+        _causal_roi_cfg = None
+        if int(getattr(self.config, "roi_predict_horizon", 0)) > 0:
+            _causal_vb = getattr(self._backbone(), "vision_backbone", None)
+            _causal_roi_cfg = getattr(_causal_vb, "roi_cfg", None) if _causal_vb is not None else None
+            if _causal_vb is not None and getattr(_causal_roi_cfg, "select", None) == "gate_predict":
+                _causal_vb.roi_external_keep_idx = getattr(self, "_roi_pred_prev_keep_idx", None)
+                _causal_vb.roi_last_gate_scores = None
+            else:
+                _causal_vb = None
         inference_action_mode = self._resolve_inference_action_mode(kwargs.get("inference_action_mode"))
         num_steps = kwargs.get("num_steps", getattr(self.config, "num_inference_steps", None))
         generator = kwargs.get("generator")
@@ -2291,6 +2941,13 @@ class MolmoAct2Policy(PreTrainedPolicy):
                     prev_chunk_left_over=kwargs.get("prev_chunk_left_over"),
                     execution_horizon=kwargs.get("execution_horizon"),
                 )
+            elif self._fastv_infer_enabled():
+                actions = self._generate_actions_fastv(
+                    model_inputs=model_inputs,
+                    action_dim_is_pad=batch.get("action_dim_is_pad"),
+                    num_steps=num_steps,
+                    generator=generator,
+                )
             else:
                 actions = self._backbone().generate_actions_from_inputs(
                     **model_inputs,
@@ -2299,6 +2956,16 @@ class MolmoAct2Policy(PreTrainedPolicy):
                     num_steps=num_steps,
                     generator=generator,
                 )
+        # Carry THIS replan's predicted gate scores forward: their top-K becomes the
+        # keep-set that prunes the NEXT replan's frame (t+H), keeping inference causal.
+        if _causal_vb is not None:
+            _scores = getattr(_causal_vb, "roi_last_gate_scores", None)
+            if _scores is not None and torch.is_tensor(_scores):
+                _keep = _causal_roi_cfg.resolve_keep(int(_scores.shape[1]))
+                self._roi_pred_prev_keep_idx = (
+                    _scores.detach().topk(_keep, dim=1).indices.sort(dim=1).values
+                )
+            _causal_vb.roi_external_keep_idx = None
         return actions[:, : self.config.n_action_steps, :action_dim].to(dtype=torch.float32)
 
     @torch.no_grad()

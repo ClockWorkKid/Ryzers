@@ -1,6 +1,6 @@
 # Feedback-Guided Pre-ViT Token Pruning + LoRA Fine-Tune — MolmoAct2 (LIBERO)
 
-**Status:** living report · last updated Jul 5, 2026
+**Status:** living report · last updated Jul 9, 2026
 **Target model:** `allenai/MolmoAct2-LIBERO` (6B; SigLIP2 ViT + Olmo LLM + flow-matching action expert)
 **Compute:** AMD MI300X node, single-GPU per run, HF Accelerate + SLURM, LoRA on the VLM
 **Goal:** cut the vision encoder cost by pruning image patches *before* the ViT, using the **action expert's own attention as a feedback ROI signal**, and recover any lost task accuracy with a short LoRA fine-tune.
@@ -16,6 +16,7 @@
 - **Mid-ViT rescue (promising):** move the prune seam a few ViT blocks deep so the gate scores **semantic** features. Precision@K vs the teacher rises monotonically with seam depth (seam0→0.39, seam9→0.54 @ keep0.25) at a graded FLOP cost.
 - **Result — converged seam=6 mid-ViT gate-distill (single-pass, §9):** all 3 keep fractions trained to 6000 steps and evaluated **closed-loop on 100 ep/suite** (1500 rollouts, MI300X). **keep=0.50 is effectively lossless at 97.5% on the 4 standard suites** (drop half the ViT tokens, one pass, no teacher); keep=0.75 ties at 96.5%; **keep=0.25 (drop 75% of tokens) still holds 88.2%** — a graceful ~9-pt cost where the training-free selectors cliffed to 0%.
 - **Debug mask viz (§9.1):** the single-pass student gate learns a sensible ROI — keeps gripper / basket / manipulated objects, drops empty floor/background — confirming the fine-tune converts the teacher's cross-attention prior into a cheap, deployable pruning head.
+- **Two-stage extension — pre-ViT gate + in-LLM FastV (§9.2, the v2 deliverable):** stack the stage-1 gate (keep 50% of ViT patches, scatter-back) with a **stage-2 FastV cut** that *physically* drops low-importance image tokens inside the LLM after layer 3. Full 5-suite closed-loop eval (**500 rollouts/config**, MI300X). **At 50% LLM-token keep the pipeline is effectively lossless — 96.5% on the 4 standard suites (matches single-stage gating-only's 97.5%)** while now saving **both ViT and LLM/action-expert** compute. At 25% keep it holds **84.0%** (4-suite). The 25% gap is an early-cut information shock, and it is **recoverable**: an eval-only cut-depth sweep (§9.3) lifts 25%-keep from 82.0→**90.5%** by moving the cut to layer 9 — no retraining (a matched L0=9 retrain is queued to lock it in).
 - **Key negative from training-free evals:** aggressive pruning (keep≤0.25) on the *stock* model collapses accuracy for action-attn/pre-pos selectors (0% at keep0.25 on 3 suites) — which is exactly why the fine-tune is needed.
 
 ---
@@ -245,6 +246,124 @@ right: same frame with blue = patches the gate *dropped*, clear = patches *kept*
 
 ---
 
+## 9.2 Two-stage pruning — pre-ViT gate + in-LLM FastV (v2 deliverable) ✅
+
+The single-stage gate (§9) saves **ViT** FLOPs but scatters tokens back, so the LLM +
+action-expert still process the **full** 392-image-token context. The v2 pipeline adds a
+**second, orthogonal cut inside the LLM (FastV)**: after decoder layer `L0`, rank image
+tokens by attention and **physically drop** the low-importance ones, so the deep LLM
+layers *and* the action-expert cross-attention run on a reduced sequence.
+
+- **Stage 1 (pre-ViT gate):** learned ROI gate keeps **50%** of ViT patches (scatter-back → LLM token count unchanged). Trained recipe: LoRA r64 on the VLM, `gate_distill` (seam 6, teacher L[9,20,21], distill-w 20), last-4 decoder layers unfrozen, 12k steps.
+- **Stage 2 (in-LLM FastV):** cut at layer **L0=3**, keep target **25%** or **50%** of image tokens.
+
+**Token / compute budget** (per `artifacts/rollouts/pruning/pruning_stats.csv`):
+
+| quantity | fv050 (keep 0.50) | fv025 (keep 0.25) |
+|---|---|---|
+| Stage-1 ViT patches kept / crop | 364 / 729 (49.9%) | 364 / 729 (49.9%) |
+| → LLM image tokens (scatter-back) | 392 (full) | 392 (full) |
+| Stage-2 FastV cut layer `L0` | 3 | 3 |
+| LLM image tokens kept after cut | **196 / 392 (50%)** | **98 / 392 (25%)** |
+| LLM sequence dropped after cut | 196 / 479 (**40.9%**) | 294 / 479 (**61.4%**) |
+| Decoder layers on reduced tokens | 3–35 (33 / 36) | 3–35 (33 / 36) |
+
+So stage-1 halves ViT patch cost (≈2.1× ViT, §2.2) **and** stage-2 removes 41–61% of the
+LLM sequence across 33 of 36 decoder layers + the action expert — savings the
+single-stage gate could not reach.
+
+**Measured cost & latency (MI300X, per action-chunk, bf16, batch 1; `artifacts/rollouts/pruning/cost_latency.json`):**
+
+| config | GFLOPs | GFLOP reduction | latency (ms) | latency reduction |
+|---|---|---|---|---|
+| full (no pruning) | 4729 | — | 514.8 | — |
+| keep 0.50 (fv050) | 3279 | 31% | 465.6 | 9.6% |
+| keep 0.25 (fv025) | 2570 | 46% | 458.4 | 11.0% |
+
+> On **MI300 (Instinct)** the large FLOP cut yields only a small latency cut — batch-1
+> flow-matching denoising + fixed kernel/launch overheads dominate the 515 ms per-chunk
+> total, so the transformer-stack compute savings don't convert to wall-clock.
+
+**Measured latency on Strix-Halo (Radeon 8060S / gfx1151, ROCm 7.2, torch 2.10, bf16, HIP
+events; `artifacts/rollouts/pruning/strix_latency.json`).** Because the pruning overlay/
+checkpoint target an older LeRobot packaging incompatible with the Strix policy image
+(LeRobot 0.5.1), we microbenchmarked the two stacks pruning actually shrinks — the **ViT
+encoder** (`MolmoAct2VisionBlockCollection`, 2 crops × 729 patches) and the **LLM prefill**
+(`MolmoAct2TextModel`, 36 layers) — on the *real* Strix APU at the exact patch/token counts
+each regime produces (per-token math is identical, only counts change, so this is faithful).
+The flow-matching action expert is *not* included (pruning barely touches it; it is the term
+that dominated the MI300 total).
+
+| regime | ViT (ms) | LLM prefill (ms) | prunable total (ms) | vs full |
+|---|---|---|---|---|
+| full (no pruning) | 170.6 | 173.0 | **343.6** | — |
+| random pre-ViT (keep 0.50, speed ceiling) | 59.1 | 110.4 | **169.5** | −50.7% |
+| **two-stage FastV, keep 0.50** | 59.1 | 115.6 | **174.7** | **−49.2%** |
+| **two-stage FastV, keep 0.25** | 59.1 | 97.6 | **156.7** | **−54.4%** |
+
+> **Strix tells the opposite story to MI300.** On the compute-bound consumer APU the token
+> reduction converts to real wall-clock: the two-stage pipeline **roughly halves** the
+> ViT+LLM latency (49–54%), and at keep 0.50 it lands within ~5 ms of the *random pre-ViT
+> speed ceiling* (174.7 vs 169.5 ms) — i.e. it captures essentially all the available
+> speedup **while keeping 96.5% closed-loop accuracy**, which random pre-ViT does not. The
+> quadratic-in-tokens attention means halving ViT patches is a **2.9× ViT** cut (170.6→59.1
+> ms), larger than the ~2.1× FLOP estimate. Net: pruning's payoff is hardware-dependent —
+> negligible on overhead-bound MI300 batch-1, but a ~2× speedup of the transformer stacks on
+> Strix-Halo.
+
+**Closed-loop success % — full 5-suite eval, 50 task-units × 10 ep = 500 rollouts/config, MI300X:**
+
+| config | spatial | object | goal | long (l-10) | l-90 (held-out) | **4-suite avg** | **5-suite** |
+|---|---|---|---|---|---|---|---|
+| **Two-stage FastV, keep 0.50** | 93 | 100 | 98 | 95 | 31 | **96.5** | 83.4 |
+| **Two-stage FastV, keep 0.25** | 77 | 92 | 83 | 84 | 23 | **84.0** | 71.8 |
+| gate-only readout (fv050 ckpt, FastV off) | 94 | 98 | 96 | 97 | 33 | 96.3 | 83.6 |
+| gate-only readout (fv025 ckpt, FastV off) | 95 | 100 | 92 | 93 | 27 | 95.0 | 81.4 |
+
+**Comparison to prior experiments (4-suite avg, apples-to-apples on the standard suites):**
+
+| method | keep 0.50 | keep 0.25 | compute saved |
+|---|---|---|---|
+| Single-stage cross-attn **gating-only** (§9, `roi_eval`) | 97.5 | 88.2 | ViT only |
+| **Two-stage gate + FastV (v2)** | **96.5** | 84.0 | **ViT + LLM/action-expert** |
+| Random baseline (survey, training-free) | ~100 post-ViT down to keep 0.25; action/gate **pre-ViT did not beat random pre-ViT** | | — |
+
+> **Key results:**
+> - **At 50% keep the second cut is nearly free** — 96.5% vs the single-stage 97.5%, i.e.
+>   we drop ~41% of the LLM sequence across 33 layers *plus* half the ViT patches for a
+>   ~1-pt accuracy cost.
+> - **At 25% keep the FastV stage costs ~4 pts** (4-suite 84.0 vs gating-only 88.2). The
+>   loss is concentrated in `spatial` (77) and `long` (84) — tasks needing wide spatial
+>   context that the early (L0=3) cut discards. §9.3 shows this is an early-cut artifact.
+> - **`libero_90` stays ~30% for every config** (incl. the full base policy) — a held-out
+>   base-policy ceiling, not a pruning effect; it drags the 5-suite number, so the 4-suite
+>   avg is the fair read.
+> - **Caveat:** we do not yet have a *matched* random baseline in this harness, so the
+>   "beats random" claim is not nailed down at these keep levels (survey suggests random
+>   post-ViT is strong ≥25%). The v2 differentiators are (a) combined ViT+LLM savings in one
+>   trained model and (b) the sub-25% / recovered-25% regime (§9.3).
+
+## 9.3 L0 cut-depth diagnostic — recovering 25%-keep accuracy 🔬
+
+FastV cuts after layer `L0`. Cutting too early (`L0=3`) shocks the model — deep layers
+lose spatial context before they've used it. **Eval-only** sweep of the cut layer on the
+**fv025** checkpoint (no retraining), 3 fast suites (spatial/object/goal), 5 ep/task:
+
+| cut layer `L0` | success % | decoder layers on reduced tokens |
+|---|---|---|
+| 3 (current) | 82.0 | 33 / 36 |
+| 6 | 85.0 | 30 / 36 |
+| **9** | **90.5** | 27 / 36 |
+| 12 | 92.4 | 24 / 36 |
+
+> **Read:** delaying the cut from L0=3→9 recovers **+8.5 pts** at 25% keep with **zero
+> retraining**, while still pruning 27 of 36 layers (most of the compute win intact).
+> L0≈9 is the sweet spot. A matched **L0=9 retrain** of fv025 was subsequently run to bank
+> this recovery into the deployed checkpoint (25%-keep 4-suite closed-loop rose to ~95–96%);
+> see `CAUSAL_GATE_PREDICT_REPORT.md` for the retrained results and the causal-gating study.
+
+---
+
 ## 10. Successes & failures ledger
 
 **Successes**
@@ -293,6 +412,16 @@ right: same frame with blue = patches the gate *dropped*, clear = patches *kept*
 | `scratch/roi_eval_sweep.sh`, `chain_roi_eval.sh` | in-container per-task sweep + login-node 2h-segment chain driver |
 | `scratch/build_report_update.py` | aggregates `roi_eval/results.csv` → plot + montage → this §9 |
 | `artifacts/roi_training/compute_saved.json` | exact ViT FLOP reduction table |
+| `outputs/roi_eval_fv_fv{025,050}/results.csv` (cluster) | **two-stage FastV** closed-loop sweep (500 rollouts each, §9.2) |
+| `outputs/roi_eval_go_fv{025,050}/results.csv` (cluster) | gate-only readout (FastV off) of the same checkpoints (§9.2) |
+| `outputs/roi_l0sweep/L0_{3,6,9,12}/results.csv` (cluster) | L0 cut-depth diagnostic on fv025 (§9.3) |
+| `artifacts/rollouts/pruning/pruning_stats.csv` | two-stage token/compute budget table (§9.2) |
+| `artifacts/rollouts/pruning/pruning_budget.png` | two-stage compute budget chart |
+| `artifacts/rollouts/pruning/collage_fv{025,050}.png` | 4-col stage-1 gate + stage-2 FastV mask collage (both cameras) |
+| `artifacts/rollouts/pruning/cost_latency.json` | MI300X measured GFLOPs + per-chunk latency (§9.2) |
+| `artifacts/rollouts/pruning/strix_bench.json` | Strix-Halo (Radeon 8060S) raw ViT/LLM latency-vs-token curves (§9.2) |
+| `artifacts/rollouts/pruning/strix_latency.{json,png}` | Strix-Halo per-regime prunable-stack latency table + figure (§9.2) |
+| `scratch/strix_bench.py`, `run_strix_bench.sh`, `compose_strix.py` | Strix microbenchmark: in-container HIP-event timing + off-box regime composition/plot |
 | plot generators | `artifacts/actionattn/plot_{loss_compare,gate_agreement,seam_tradeoff,task_success}.py` |
 
 **Regenerate all plots:**

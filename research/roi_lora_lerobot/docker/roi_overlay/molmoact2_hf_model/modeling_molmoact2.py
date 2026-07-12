@@ -1752,6 +1752,38 @@ class MolmoAct2VisionBackbone(nn.Module):
         self.image_feature_dropout = nn.Dropout(adapter_config.image_feature_dropout)
         self.gradient_checkpointing = False
 
+    def roi_gate_scores_at_seam(self, images: torch.Tensor, task_img=None) -> torch.Tensor:
+        """Score the ROI gate on a frame WITHOUT running the full ViT / pooler.
+
+        Runs only the patch-embedding + positional embedding + the first `gate_seam`
+        ViT blocks (exactly the features the gate scores in `encode_image`), then
+        applies the gate MLP. Returns per-image per-patch keep-logits
+        [batch*num_crops, num_patches].
+
+        Used by causal predictive gating (select='gate_predict'): the keep-set that
+        prunes the CURRENT frame is scored HERE on a PAST frame, so the ViT pruning
+        is a function of the past observation only (no look-ahead). Grad flows into
+        the gate (and the seam blocks if unfrozen) so the prediction can be trained.
+        """
+        from ..roi_prune import score_patches
+
+        batch_size, num_crops, num_patches, patch_dim = images.shape
+        x = images.view(batch_size * num_crops, num_patches, patch_dim)
+        x = self.image_vit.patch_embedding(x)
+        x = self.image_vit.add_pos_emb(x, self.image_vit.config.image_num_patch)
+
+        roi_cfg = getattr(self, "roi_cfg", None)
+        seam = max(0, int(getattr(roi_cfg, "gate_seam", 0))) if roi_cfg is not None else 0
+        needed_layers = {int(layer) for layer in self.vit_layers}
+        if needed_layers:
+            seam = min(seam, min(needed_layers))
+        for layer_idx, block in enumerate(self.image_vit.transformer.resblocks):
+            if layer_idx >= seam:
+                break
+            x = block(x)
+        gate = getattr(self, "roi_gate", None)
+        return score_patches(x, "gate", gate=gate, task=task_img)
+
     def encode_image(self, images: torch.Tensor) -> torch.Tensor:
         """
         : param images: (batch_size, num_crops, num_patch, n_pixels)
@@ -1838,13 +1870,30 @@ class MolmoAct2VisionBackbone(nn.Module):
                         # own no-grad forward reaches here with ext=None -> UNPRUNED.
                         if ext is not None and ext.shape[0] == feat.shape[0]:
                             keep_idx = ext.to(device=feat.device)
-                            self.roi_last_gate_scores = score_patches(
-                                feat, "gate", gate=gate, task=task_img
-                            )
+                            # gate_distill: the gate is scored on THIS (current) frame
+                            # and distilled toward the teacher. gate_predict (causal):
+                            # the gate was already scored on the PAST frame by the
+                            # policy (roi_predicted_gate_scores); the keep-set `ext` is
+                            # its top-K, so do NOT rescore the current frame here.
+                            if roi_cfg.select != "gate_predict":
+                                self.roi_last_gate_scores = score_patches(
+                                    feat, "gate", gate=gate, task=task_img
+                                )
                             return gather_keep(feat, keep_idx)
                         return feat
                     # Single-pass inference: the gate alone selects the keep-set.
                     gate_scores = score_patches(feat, "gate", gate=gate, task=task_img)
+                    if roi_cfg.select == "gate_predict":
+                        # Causal predictive inference: prune the CURRENT frame with the
+                        # keep-set the gate predicted at the PREVIOUS replan (t-H),
+                        # carried in by the policy as `roi_external_keep_idx` (captured
+                        # here as the enclosing `ext`); always expose THIS frame's gate
+                        # scores so the policy can carry them forward to the next replan.
+                        # The gate therefore never sees the frame it prunes (causal).
+                        self.roi_last_gate_scores = gate_scores.detach()
+                        if ext is not None and ext.shape[0] == feat.shape[0]:
+                            keep_idx = ext.to(device=feat.device)
+                            return gather_keep(feat, keep_idx)
                     keep_idx = select_topk(gate_scores.detach(), keep)
                     return gather_keep(feat, keep_idx)
 
