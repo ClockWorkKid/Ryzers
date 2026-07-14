@@ -158,6 +158,17 @@ class DirectXWAM:
         ckpt = torch.load(ckpt_path, map_location="cpu")
         model.load_state_dict(ckpt["module"])
         model.eval()
+
+        # Optional non-destructive runtime optimizations (bf16 VAE/DiT + condition
+        # caches; no step-count change). Default-off: an unset XWAM_OPT leaves the
+        # runner bit-exact-identical to upstream. See experiments/xwam_opts.py.
+        if os.environ.get("XWAM_OPT", "").strip().lower() in {"1", "true", "yes", "on"}:
+            _here = os.path.dirname(os.path.abspath(__file__))
+            if _here not in sys.path:
+                sys.path.insert(0, _here)
+            from xwam_opts import apply_opts
+            apply_opts(model)
+
         self.model = model
 
     @torch.inference_mode()
@@ -181,3 +192,37 @@ class DirectXWAM:
         if not self.has_right_arm:
             actions[:, 6] *= -1.0  # invert gripper for single-arm (robocasa)
         return actions
+
+    def _preprocess(self, rgbs_vhwc, proprio_raw):
+        rgb = torch.from_numpy(rgbs_vhwc).bfloat16().unsqueeze(0).cuda()
+        rgb = self._rearrange(rgb, "b v h w c -> b v c h w")
+        rgb = _resize_and_center_crop_tensor(rgb, self.video_size, 0.95)
+        proprio_norm = 2 * (proprio_raw - self.state_q01) / (self.state_q99 - self.state_q01) - 1
+        if not self.has_right_arm:
+            proprio_norm[8:] = 0.0
+        proprio = torch.from_numpy(proprio_norm).bfloat16().unsqueeze(0).cuda()
+        return rgb, proprio
+
+    @torch.inference_mode()
+    def infer_video(self, rgbs_vhwc: np.ndarray, proprio_raw: np.ndarray, prompt, seed: int, cfg: float = 0.0):
+        """Full-video diffusion path (early_stop=False): runs ALL sample_steps + the Wan2.2
+        multi-view RGB(+depth) VAE decode. Returns the decoded montage plus the denormalized
+        action chunk and predicted proprio so a caller can execute or chain (ungrounded).
+
+        Returns:
+            pred_videos: [t, (m*H), (V*W), 3] uint8 montage (m=1 RGB, or 2 = RGB over depth).
+            actions:     [Ta, action_dim] denormalized delta-EE (gripper flipped for single-arm).
+            proprios:    [Tp, proprio_dim] denormalized predicted proprio (for ungrounded chaining).
+        """
+        rgb, proprio = self._preprocess(rgbs_vhwc, proprio_raw)
+        run_depth = bool(self.config.get("use_depth", False))
+        pred_videos, xt_actions, xt_proprios, _ = self.model.generate(
+            rgb, proprio, list(prompt), seeds=[seed], early_stop=False, cfg=cfg, run_depth=run_depth
+        )
+        actions = xt_actions[0].float().cpu().numpy()
+        actions = (actions[:, : self.action_dim] + 1) / 2 * (self.action_q99 - self.action_q01) + self.action_q01
+        if not self.has_right_arm:
+            actions[:, 6] *= -1.0
+        pp = xt_proprios[0].float().cpu().numpy()
+        proprios = (pp + 1) / 2 * (self.state_q99 - self.state_q01) + self.state_q01
+        return pred_videos, actions, proprios

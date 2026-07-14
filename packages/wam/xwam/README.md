@@ -76,6 +76,9 @@ TASK=TurnOnSinkFaucet NUM_EVALS=10 ryzers run --name xwam-robocasa /ryzers/demos
 - `DENOISE_STEPS` (video, default 50) / `ACTION_DENOISE_STEPS` (action, default 10) — async denoising.
 - `CFG`, `RUN_DEPTH`, `FRAME_NUM`, `SEED`, `PROMPT`.
 - `HF_TOKEN` for faster/gated downloads.
+- Runtime speedups (see `RUNTIME_OPTIMIZATION.md`): `XWAM_OPT=1` enables the bf16 stack +
+  condition caches (default-on, bf16-equivalent; run under `python -O`); `XWAM_KV=1`
+  (`XWAM_KV_PREFILL_STEPS`, default 3) is the opt-in video-prefill / cross-step K/V-reuse knob.
 
 ### References
 
