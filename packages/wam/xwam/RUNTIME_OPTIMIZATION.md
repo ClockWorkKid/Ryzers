@@ -41,10 +41,38 @@ episodes); K=1 is too aggressive (8/10, one seed flips).
 X-WAM jointly denoises **video + depth + robot proprio + actions** in one DiT, using
 **Asynchronous Noise Sampling (ANS)**: the video branch runs the full `DENOISE_STEPS`
 (default 50) for fidelity while actions/proprio run few `ACTION_DENOISE_STEPS` (default 10) for
-control. One forward fuses ~8.6k multi-view video tokens with the tiny action (32) + proprio
-token streams. The deployed policy path (`infer_action`, `early_stop`, no VAE decode) only
-needs the action chunk; the full-video path (`infer_video`, all steps + Wan2.2 multi-view VAE
-decode) is used for visualization (§4.2).
+control. One forward fuses **720** multi-view video tokens (Wan2.2 VAE latent 48×3×16×20 per
+view → patch-embed (1,2,2) → grid 3×8×10 × 3 views) with the tiny **32** action + **9** proprio
+streams (**761** total), cross-attending to **512** UMT5 text tokens. **Depth is output-only** —
+an interleaved branch (the last 10 DiT blocks, duplicated) predicts depth latents from the
+video-token stream + the backbone's cached K/V; the model never *ingests* depth (not at
+train, where real depth is only the loss target, nor at inference). The deployed policy path
+(`infer_action`, `early_stop`, no VAE decode) only needs the action chunk; the full-video path
+(`infer_video`, all steps + Wan2.2 multi-view VAE decode) is used for visualization (§4.2).
+
+### 2.1 Measured architecture & per-stage cost
+
+Per-module numbers measured on-device (one `robocasa_sft` model, `gfx1151`) — GFLOPs via
+`torch.utils.flop_counter.FlopCounterMode` (each stage isolated; matmul/conv = 2×MACs, SDPA
+included), latency cuda-synced over one real `generate()`, token shapes captured live from the
+forward pass:
+
+![X-WAM module flow, tokens, GFLOPs & latency](assets/xwam_arch.png)
+
+| Stage | Params | GFLOPs / call | Action path | Full-video path |
+|---|---:|---:|---|---|
+| UMT5-XXL text encode | 5.68 B | 4,845 | ×1 · 0.49 s | ×1 · 0.49 s |
+| Wan2.2 VAE encode | 0.70 B | 8,007 | ×1 · 4.03 s | ×1 · 4.00 s |
+| Joint DiT / step (no depth) | 4.91 B (30 blk) | 7,672 | ×10 · 0.82 s/st | — |
+| Joint DiT / step (+depth) | +1.64 B (10 blk) | 10,126 | — | ×50 · 0.96 s/st |
+| Wan2.2 VAE decode (RGB+depth, 3 views) | 0.70 B | 83,531 | — (skipped) | ×1 · 59.5 s |
+
+**Totals:** deployed action path **≈ 89.6 TFLOP · 12.7 s** (no VAE decode); full-video path
+**≈ 602.7 TFLOP · 112.2 s**. Total params **13.06 B** (UMT5 5.68 / VAE 0.70 / DiT 6.67, of which
+the depth branch is 1.64). Peak VRAM **40.5 GB**. Latency above is the **stock** upstream
+precision path — the bf16 stack (§3, ~2×) and the opt-in KV-reuse knob (§4.1, ~1.6×) cut it
+further. Note **~95 % of the 761 DiT tokens are video (720)** and are recomputed every denoise
+step in stock — exactly the redundancy §4.1 removes.
 
 ---
 
@@ -150,7 +178,8 @@ Attention, complex-RoPE and LayerNorm are already cheap here (<2.1% each) — lo
 - **Video rollout:** run `experiments/robocasa_xwam/xwam_policy/video_rollout.py`
   (env: `TASK`, `NUM_EVALS`, `MODES="grounded,ungrounded"`, `REPLAN_STEPS`, `OUT_DIR`, …).
 - Drivers / raw data (local, rule 4): `agent_scripts/latency_opt/` (op profiler, KV probe,
-  closed-loop A/B); results under `artifacts/xwam_latency/` and `artifacts/xwam_video_rollout/`.
+  closed-loop A/B, `xwam_arch/` FlopCounterMode probe + figure renderer); results under
+  `artifacts/xwam_latency/` (incl. `arch_robocasa_sft.json`) and `artifacts/xwam_video_rollout/`.
 
 ---
 
