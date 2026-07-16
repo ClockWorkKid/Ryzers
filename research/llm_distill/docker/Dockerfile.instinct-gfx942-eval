@@ -1,0 +1,80 @@
+# MolmoAct2 + LeRobot CLOSED-LOOP LIBERO EVAL image — AMD Instinct MI300X/MI210 (gfx942).
+# Layers the LIBERO simulator (hf-libero = LIBERO + robosuite + mujoco + bddl)
+# on top of the validated training image so the SAME ROCm torch + baked-in
+# ROI-prune overlay are reused for evaluation.
+#
+#   docker build -t molmoact2-lerobot-eval:rocm942 -f Dockerfile.instinct-gfx942-eval .
+#
+# NOTE: this is a snapshot copy for the llm_distill backup; the canonical train+eval
+# Dockerfiles and the model overlay live in ../../roi_lora_lerobot/docker/. The training
+# image already carries lerobot@052d329 (which declares the `libero` extra: hf-libero>=0.1.4)
+# plus the roi_overlay policy files, so this image only needs the sim's system GL libs +
+# the python sim stack.
+FROM molmoact2-lerobot-train:rocm942
+SHELL ["/bin/bash", "-lc"]
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# GL/EGL/OSMesa headers + runtime for robosuite/mujoco offscreen rendering.
+# EGL is the fast path; OSMesa is the CPU fallback if headless EGL is unavailable
+# on the data-center GPU. egl_probe (a robosuite dep) needs the -dev headers.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      cmake build-essential \
+      libegl-dev libgles-dev libosmesa6-dev libglew-dev \
+      libgl1 libglfw3 libglib2.0-0 libosmesa6 \
+    && rm -rf /var/lib/apt/lists/*
+
+# egl_probe / hf-egl-probe (robomimic deps) compile a C++ helper via cmake. The
+# base venv ships a BROKEN `/opt/venv/bin/cmake` shim (`from cmake import cmake`
+# -> ModuleNotFoundError) that shadows the working apt cmake on PATH. Delete the
+# dead shims so their `cmake --version` call resolves to /usr/bin/cmake (apt).
+RUN rm -f /opt/venv/bin/cmake /opt/venv/bin/ctest /opt/venv/bin/cpack; \
+    hash -r 2>/dev/null || true; \
+    command -v cmake; cmake --version | head -1; \
+    pip install --no-cache-dir ninja
+
+# Install the LIBERO sim stack via lerobot's `libero` extra. Pin the ROCm torch
+# trio by PUBLIC version (strip the local +rocm segment) so pip treats them as
+# satisfied and never swaps in CUDA wheels while resolving robosuite/mujoco.
+RUN set -e; \
+    python -c "import torch;print('torch=='+torch.__version__.split('+')[0])"        > /tmp/torch-con.txt; \
+    python -c "import torchvision;print('torchvision=='+torchvision.__version__.split('+')[0])" >> /tmp/torch-con.txt 2>/dev/null || true; \
+    python -c "import torchaudio;print('torchaudio=='+torchaudio.__version__.split('+')[0])"     >> /tmp/torch-con.txt 2>/dev/null || true; \
+    echo "=== torch constraint ==="; cat /tmp/torch-con.txt; \
+    PIP_CONSTRAINT=/tmp/torch-con.txt pip install --no-cache-dir -e "/opt/lerobot[libero]"
+
+# Default to EGL offscreen; override to osmesa at runtime if EGL fails.
+ENV MUJOCO_GL=egl PYOPENGL_PLATFORM=egl
+
+# LIBERO's first import runs an INTERACTIVE prompt ("specify a custom dataset
+# path? (Y/N)") that EOFErrors in a non-interactive build. Feed "N" so it writes
+# its default config (bundled bddl_files/init_states/assets; demo datasets are
+# not needed for closed-loop rollout). Runtime re-bootstraps under HOME=/cache.
+RUN printf 'N\n' | python -c "import libero.libero" 2>/dev/null || true
+
+# robosuite: (1) create the private macros file so `import robosuite.macros_private`
+# succeeds (else a noisy traceback), (2) remove the root-owned /tmp/robosuite.log
+# baked by the import above -- at runtime the container runs as the NON-root host
+# user and robosuite's hard-coded FileHandler("/tmp/robosuite.log") would hit
+# PermissionError on the root-owned file; deleting it lets the user create a fresh
+# one in the world-writable /tmp.
+RUN python /opt/venv/lib/python3.12/site-packages/robosuite/scripts/setup_macros.py 2>/dev/null || true; \
+    rm -f /tmp/robosuite.log; \
+    chmod 1777 /tmp
+
+# Sanity: torch stays ROCm; the sim stack + LIBERO suites import; ROI overlay intact.
+RUN python - <<'PY'
+import torch
+assert torch.version.hip, "torch not ROCm: " + torch.__version__
+import robosuite, mujoco, bddl
+from libero.libero import benchmark
+suites = sorted(benchmark.get_benchmark_dict().keys())
+print("torch", torch.__version__, "| hip", torch.version.hip)
+print("robosuite", robosuite.__version__, "| mujoco", mujoco.__version__,
+      "| bddl", getattr(bddl, "__version__", "ok"))
+print("LIBERO suites:", suites)
+from lerobot.policies.molmoact2 import roi_prune as rp
+from lerobot.policies.molmoact2.configuration_molmoact2 import MolmoAct2Config
+c = MolmoAct2Config()
+print("ROI overlay intact | roi_prune_select default:", c.roi_prune_select, "| module:", rp.__name__)
+PY

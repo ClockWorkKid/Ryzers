@@ -344,14 +344,9 @@ def build_policy(args):
 def swap_in_student(policy, args):
     """In-place: replace transformer with the trained student and merge the action-expert LoRA.
     Call AFTER all teacher rollouts (this permanently mutates the action-expert projections)."""
-    import student as S, joint_patch as JP
+    import joint_patch as JP
     ck = torch.load(args.student_ckpt, map_location="cpu", weights_only=False)
-    keys = ("hidden", "num_heads", "intermediate", "num_layers", "num_kv_heads",
-            "head_dim", "rope_theta", "teacher_hidden", "rms_eps", "use_qk_norm")
-    scfg = {k: v for k, v in ck["cfg"].items() if k in keys}
-    stu, _ = S.build_student(scfg)
-    stu.load_state_dict(ck["student"], strict=True)
-    JP.load_student_and_merge_lora(policy, stu, ck)
+    JP.assemble_student_for_eval(policy, ck)
     policy.eval()
     return ck.get("step")
 

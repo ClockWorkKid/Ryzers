@@ -70,13 +70,9 @@ def main():
 
     if not args.teacher_baseline:
         ck = torch.load(args.student_ckpt, map_location="cpu", weights_only=False)
-        scfg = {k: v for k, v in ck["cfg"].items()
-                if k in ("hidden", "num_heads", "intermediate", "num_layers", "num_kv_heads",
-                         "head_dim", "rope_theta", "teacher_hidden", "rms_eps", "use_qk_norm")}
-        stu, _ = S.build_student(scfg)
-        ms, us = stu.load_state_dict(ck["student"], strict=True)
-        JP.load_student_and_merge_lora(policy, stu, ck)
-        print(f"[eval] swapped student from {args.student_ckpt} (step={ck.get('step')})", flush=True)
+        JP.assemble_student_for_eval(policy, ck)
+        print(f"[eval] swapped student from {args.student_ckpt} "
+              f"(step={ck.get('step')}, phase={ck.get('phase', 'legacy')})", flush=True)
     policy.eval()
 
     pre, post = make_pre_post_processors(policy_cfg=cfg, dataset_stats=ds_meta.stats)

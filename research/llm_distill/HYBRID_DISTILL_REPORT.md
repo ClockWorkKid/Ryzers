@@ -1,6 +1,6 @@
 # Hybrid LLM-Backbone Distillation for MolmoAct2 — KV-Anchoring + Token-Reduction
 
-**Date:** 2026-07-14  ·  **Benchmark:** LIBERO closed-loop (`libero_spatial`, task 0, fixed seeds 1000+)
+**Date:** 2026-07-15 (Workstream E / DAgger round-1 + AE-LoRA round-1b complete; best closed-loop = 47.5 %)  ·  **Benchmark:** LIBERO closed-loop (fixed seeds 1000+; per-run suite/task noted)
 **Compute:** AMD Instinct (single-GPU per run, Apptainer SIF). Teacher = `MolmoAct2-LIBERO` (36-layer Qwen3 backbone + flow-matching action expert).
 
 ## TL;DR
@@ -16,6 +16,29 @@ student, both training the **stock flow-matching action loss** with the frozen a
   student trains cleanly on the reduced stream (held-out flow **0.046**, per-layer KV cos ~**0.9** to the
   reduced-teacher) but scores **0%** closed-loop. A control proves this is a capacity limit, not a harness bug:
   the **full-width teacher through the identical prune-before-student harness scores 100%**.
+- **Workstream C — healing-budget vs pruning-damage (Minitron prune-then-heal): SUCCESS.** The 0% from the
+  earlier 500-step curriculum heals was a *heal-budget* artifact, not pruning damage. Matched 6000-step anchored
+  heals give **mildest-prune (1.13×) = 50%** vs **non-pruned control = 20%** closed-loop — i.e. a mildly pruned
+  student *beats* the un-pruned one under the same recipe, so the earlier collapse was under-training.
+- **Workstream D — joint LLM + full-AE co-distillation (Experiment D): negative (completed).**
+  Co-adapting the student LLM **and the full action expert** (anchor on) drove the best open-loop flow of any
+  run (held-out **0.061**, teacher 0.582) yet Gate-1 closed-loop was only **5.0%** over 120 episodes (4 suites ×
+  10 tasks × 3 ep). The Phase-2 LoRA fine-tune on real LIBERO (`llm,ae,vit`, anchor off, 12k) roughly doubled
+  it to **Gate-2 = 9.2%** — still **far below the 30% frozen-AE + KV-anchor baseline** (Workstream A). Unfreezing
+  the AE does **not** beat freezing it, and a real-data LoRA pass does not recover the gap.
+- **Workstream E — on-policy DAgger + AE-LoRA (complete): new program best 47.5%.** A/B/C/D all optimize
+  *teacher-forced* objectives; none touch the closed-loop covariate-shift gap. Workstream E attacks it directly:
+  roll out the student, snapshot its *own* visited states, relabel them with the teacher's current-step action,
+  and fine-tune (student LLM + KV-anchor **on**) on a 50/50 on-policy/demo mix. **Round-1 (AE frozen):** `expd`
+  9.2%→16.67%, `wsa` 30%→23.33% (helps the weak base, hurts the strong one). **Round-1b (AE LoRA-adapted):**
+  `expd` jumps to **47.5%** — **+17.5 pts past the 30% WS-A ceiling** that every teacher-forced workstream was
+  stuck under (object suite 80%!), while `wsa` keeps regressing (20.83%). Lesson: closing the covariate-shift gap
+  needs *both* on-policy data *and* a co-adaptable (LoRA) action expert, and it pays off on a weak/flexible base
+  (`expd`) rather than a strong/over-committed anchored one (`wsa`). Note this is the *opposite* of Exp-D, where
+  unfreezing the whole AE under a teacher-forced objective hurt. **Round-2** (naive iteration: fresh collect from
+  the 47.5% policy, no data aggregation, full 6k retrain) **regressed to 31.67%** — non-aggregated DAgger forgets
+  the base's competence — so **R1b's 47.5% remains the program best/deliverable**. A future round-2 should
+  aggregate round-1+2 data and/or fine-tune from the R1b checkpoint (see Workstream E section).
 
 ## Background: the failure this fixes
 
@@ -103,6 +126,228 @@ a from-scratch init + a fresh full training run. Deferred as a scope decision.
 
 ---
 
+## Workstream C — healing-budget vs pruning-damage (Minitron prune-then-heal)
+
+**Question.** The all-layer KV-anchored non-pruned student (Workstream A) reached 30% in 6000 steps, but our
+Minitron pruning *curriculum* heals were only 500 steps each and scored **0%**. Was the 0% caused by the
+pruning, or by an under-sized heal budget?
+
+**Method.** Run two **matched-recipe** anchored heals (6000 steps, `gacc1`, eff. batch 4, `anchor_w=1.0
+mode=both β=0.1`), the only variable being the init:
+
+- **(a) mildest prune** — curriculum step-1 pruned-from-teacher checkpoint (`step1_i8192_h32`, ~1.13× reduction),
+- **(b) non-pruned control** — minted via a no-op prune from the teacher (9728/32 == teacher width),
+
+then closed-loop eval both (`libero_spatial` tasks 0,1,2, 10 episodes each = 30 rollouts, seed 1000). The mi210
+4-hour wall cap is honored by dropping to `gacc1` (~0.7 sps → ~2.4 h for 6000 steps).
+
+**Result.**
+
+| Init (matched 6000-step anchored heal) | Held-out flow | Closed-loop success | Teacher ref |
+|---|---|---|---|
+| Mildest prune (step-1, ~1.13×) | 0.145 | **50 % (15/30)** | 100 % |
+| Non-pruned control | 0.134 | **20 % (6/30)** | 100 % |
+| *(prior) 500-step curriculum heal* | — | *0 %* | 100 % |
+
+**Takeaway.** The 0% was **under-training, not pruning damage** — a full heal budget recovers it, and the
+mildly pruned student actually **beats** the non-pruned control (50 % vs 20 %) under the identical recipe. Heal
+budget is the dominant lever at mild compression.
+
+---
+
+## Workstream D — joint LLM + full action-expert co-distillation (Experiment D)
+
+**Hypothesis.** Workstreams A–C froze the action expert (LoRA only on `context_{k,v}_proj`). Experiment D tests
+whether **co-adapting the student LLM and the *full* action expert together** — so the AE can re-tune to the
+student's KV field instead of the teacher's — closes the flow↛rollout gap.
+
+**Design (two phases, 12k steps each, chained ≤4h jobs with optimizer/LR/step resume).**
+
+- **Phase 1 — co-adaptation.** Unfreeze the full student AE as a third trainable group alongside the student
+  LLM; teacher LLM kept resident for the all-layer KV anchor; objective `flow + λ·anchor` (anchor on).
+- **Phase 2 — LoRA fine-tune.** Wrap ViT + student LLM + student AE with LoRA, init from the Phase-1
+  checkpoint, train on **real LIBERO** with **flow only (anchor off)** to recover closed-loop behavior.
+
+**Evaluation gates.** Full harness = 4 suites (`spatial`, `object`, `goal`, `10`) × 10 tasks × 3 episodes =
+**120 rollouts**, after each phase.
+
+**Phase-1 result (Gate 1).**
+
+| Metric | Value |
+|---|---|
+| Steps trained | 12000 (done) |
+| Held-out flow (student / teacher) | **0.061 / 0.582** — best open-loop of any run |
+| Gate-1 closed-loop, overall | **5.0 % (6/120)** |
+|  · `libero_spatial` | 13.3 % |
+|  · `libero_object` | 3.3 % |
+|  · `libero_goal` | 3.3 % |
+|  · `libero_10` (long) | 0.0 % |
+
+**Phase-2 result (Gate 2).** LoRA fine-tune of `{llm, ae, vit}` on real LIBERO, flow-only (anchor off), 12k
+steps (checkpoint reload verify PASS, best held-out flow 0.056):
+
+| Suite | Gate-1 (post Phase-1) | Gate-2 (post Phase-2 LoRA) |
+|---|---|---|
+| `libero_spatial` | 13.3 % | **20.0 %** |
+| `libero_object` | 3.3 % | 10.0 % |
+| `libero_goal` | 3.3 % | **0.0 %** |
+| `libero_10` (long) | 0.0 % | 6.7 % |
+| **Overall (120 ep)** | **5.0 %** | **9.2 %** |
+| Reference baseline (Workstream A) | 30 % | 30 % |
+
+**Takeaway.** Unfreezing the full AE produced the **lowest flow loss we have seen (0.061)** yet the **worst
+broad-suite rollout** — a sharp restatement of the Workstream-A/B lesson that open-loop flow is not predictive.
+The Phase-2 real-data LoRA pass **roughly doubled rollout (5.0 → 9.2 %)** but stays **well below the 30 %
+frozen-AE + KV-anchor baseline**. Letting the AE co-adapt settled the pair into a low-flow / low-control basin
+that a downstream fine-tune only partly repairs. Net: **more trainable freedom (full AE) hurt**, and the extra
+degrees of freedom are not the missing lever — the flow↛rollout (closed-loop covariate-shift) gap is.
+
+---
+
+## Workstream E — on-policy DAgger (round-1 complete)
+
+**Motivation.** Every prior workstream (A–D) minimizes a **teacher-forced** objective on *demo* states (flow
+loss, KV anchor). Gate results (A=30 %, D=9.2 %, both with excellent open-loop flow) keep re-confirming that the
+gap to the teacher's 100 % is **closed-loop covariate shift**: the student visits states its demos never cover,
+and no teacher-forced loss ever sees them. Workstream E is the first to train on the student's *own* state
+distribution — the textbook DAgger fix for exposure bias.
+
+**Method (per arm, round 1).**
+1. **Collect** — roll out the student closed-loop over 4 suites × 10 tasks × 3 ep (full episodes) and snapshot
+   the model-ready batch at every 10-step replan (`collect_dagger.py`).
+2. **Relabel** — run the teacher's `predict_action_chunk` on each student-visited state; its **current-step**
+   normalized action is the target (`relabel_teacher.py`). Validated: teacher label ≈ demo action (MSE 0.012),
+   and it is *self-consistent* under the teacher's flow field (loss 0.23 < 0.41 demo-target < 0.58 baseline).
+3. **Fine-tune** — student LLM only (**AE frozen**, no LoRA), **KV-anchor on** (`λ=1, β=0.1`), on a **50/50
+   mix** of on-policy + demo batches, 6 k steps (`train_joint.py --train-student-only --dagger-dir`). Only the
+   *data distribution* changes vs the recipe that produced the base — the AE stays frozen precisely to avoid the
+   Exp-D full-AE regression.
+4. **Gate** — 4 suites × 10 tasks × 3 ep = 120 rollouts + aggregate.
+
+**Arms.** `wsa` (from the 30 % WS-A anchored student) and `expd` (from the 9.2 % Exp-D Phase-2 student), each
+merged to a plain student+AE init (`merge_base.py`) so both start format-uniform.
+
+**Status.** Round-1 **complete** for both arms (collect → relabel → 6 k-step student-only fine-tune → 120-ep
+gate). Scaffold fully validated (collector, relabeler, merge, and a 20-step train smoke with checkpoint verify
+PASS). On-policy pool: `wsa` 4072 relabeled states, `expd` 3932.
+
+**Round-1 gate (120 ep/arm, 4 suites × 10 tasks × 3 ep).**
+
+| Suite | `wsa` | `expd` |
+|---|---|---|
+| libero_spatial | 20.0 % | 23.3 % |
+| libero_object  | 46.7 % |  6.7 % |
+| libero_goal    |  6.7 % | 20.0 % |
+| libero_10      | 20.0 % | 16.7 % |
+| **Overall**    | **23.33 %** | **16.67 %** |
+| heldout flow   | 0.167 | 0.061 |
+
+**Outcome — split result.** DAgger moved the two arms in *opposite* directions relative to their own bases:
+- **`expd`: 9.2 % → 16.67 % (+7.5 pts, ≈1.8×).** On-policy relabeling clearly helps the weaker,
+  co-adapted student — its first real evidence of closing the covariate-shift gap.
+- **`wsa`: 30 % → 23.33 % (−6.7 pts, regressed).** One round of on-policy data *hurt* the already-strong
+  anchored student. Likely causes: (a) the round-1 on-policy states come from a 30 % policy, so ~70 % of
+  snapshots are failure/off-distribution trajectories the teacher can only weakly relabel; (b) a frozen AE
+  cannot absorb the shifted LLM features; (c) the 50/50 mix over-weights noisy on-policy targets. Neither arm
+  passed the WS-A 30 % ceiling.
+
+**Read.** On-policy data helps exactly where teacher-forced training left the most headroom (`expd`) and hurts
+where the student was already near its recipe ceiling (`wsa`). This points to iterative DAgger (round-2 collect
+from the *improved* `expd` policy) and/or unfreezing the AE during on-policy fine-tuning as the next levers,
+rather than a single large round from a fixed base.
+
+### Round-1b — on-policy DAgger with the AE unfrozen (LoRA)
+
+**Change vs round-1.** Same on-policy relabeled pools, merged bases, 50/50 mix, KV-anchor on, 6 k steps —
+but the action expert is now **LoRA-adapted** (context-K/V projections; `attach_student(adapt_ae="lora")`,
+which is exactly the legacy 30%-recipe interface) instead of frozen. Tests the leading hypothesis for the
+`wsa` regression: that a frozen AE could not absorb the shifted student LLM features on the new state
+distribution. Written to `train_aelora`/`gate2_aelora` so round-1 (frozen-AE) artifacts are preserved.
+
+**Gate (120 ep/arm).**
+
+| Suite | `expd` R1 (frozen) | **`expd` R1b (AE-LoRA)** | `wsa` R1 (frozen) | `wsa` R1b (AE-LoRA) |
+|---|---|---|---|---|
+| libero_spatial | 23.3 % | **50.0 %** | 20.0 % | 20.0 % |
+| libero_object  |  6.7 % | **80.0 %** | 46.7 % | 36.7 % |
+| libero_goal    | 20.0 % | **33.3 %** |  6.7 % |  6.7 % |
+| libero_10      | 16.7 % | **26.7 %** | 20.0 % | 20.0 % |
+| **Overall**    | 16.67 % | **47.5 %** | 23.33 % | 20.83 % |
+
+**Full trajectories.**
+
+| Arm | Base | DAgger, frozen AE (R1) | DAgger, AE-LoRA (R1b) |
+|---|---|---|---|
+| `expd` | 9.2 % | 16.67 % | **47.5 %** |
+| `wsa`  | 30.0 % | 23.33 % | 20.83 % |
+
+**Outcome — AE-LoRA is the unlock, but only for the flexible base.** `expd` goes **9.2 % (base) → 16.67 %
+(DAgger, frozen AE) → 47.5 % (DAgger, AE-LoRA)**: +38.3 pts over its base and, decisively, **+17.5 pts past the
+30 % WS-A ceiling** that every teacher-forced workstream (A–D) had been stuck under. The action expert *must* be
+allowed to co-adapt (cheaply, via LoRA) to the student's shifted features on the on-policy state distribution;
+freezing it was the limiter. This is the opposite lesson from Exp-D, where unfreezing the *whole* AE under a
+*teacher-forced* objective hurt — here a *small* AE adaptation under an *on-policy* objective is what closes the
+covariate-shift gap.
+
+`wsa`, by contrast, keeps **regressing under any on-policy round** (30 % → 23.33 % frozen → 20.83 % AE-LoRA).
+The anchored `wsa` student was trained to tightly couple its LLM features to the *frozen teacher AE* (that is
+what drove it to 30 %); a 50/50 on-policy mix — where ~70 % of collected states come from a 30 %-success policy
+and are failure/off-distribution — perturbs that coupling faster than the teacher relabels can repair it, and
+LoRA-adapting the AE does not save it. On-policy DAgger therefore helps a **weak, jointly-trainable** base with
+large headroom and hurts a **strong, over-committed** one; the right base to iterate on is `expd`.
+
+(Operational note: the `wsa` R1b trainA hung at the GPU level on one node at step ~5950 with LR already decayed
+to 0; it was cancelled and trainB resumed cleanly from the step-5000 checkpoint on another node — no learning
+lost, and the legacy-format resume correctly restored the context-proj LoRA deltas.)
+
+### Lineage of the 47.5 % model (qwen06w, NOT prune-then-heal)
+
+To avoid confusion: the 47.5 % result is the **`expd` arm on the `qwen06w` student architecture**, produced by
+the **latent-feature-matching (teacher-KV anchoring) distillation with a co-adapted LLM + action-expert pair**
+(Experiment D), then lifted by on-policy DAgger + AE-LoRA (Workstream E). It is **not** the Minitron
+prune-then-heal route.
+
+- **Architecture (verified from the checkpoint cfg):** both DAgger arms — `wsa` and `expd` — use the *same*
+  `qwen06w` student: 36 layers, hidden 1024, 16 heads / 8 KV heads, intermediate 3072, head_dim 128, distilling
+  a 2560-hidden teacher. It is warm-started from Qwen3-0.6B (a from-scratch small backbone), **not** pruned from
+  the teacher. The two arms differ only in the *distillation recipe of their base*, not the architecture:
+  - `wsa` base = pure per-layer KV-anchor + **frozen** action expert (the 30 % recipe, Workstream A).
+  - `expd` base = KV-anchor + **co-adapted** student LLM & action expert (Experiment D), Phase-2 LoRA → 9.2 %.
+- **The prune-then-heal (Minitron) student is a separate route** that pruned the teacher's depth/width only
+  mildly and healed; it is not one of the DAgger arms and is not the 47.5 % model.
+- **Decision:** `qwen06w` (Experiment-D base + Workstream-E DAgger/AE-LoRA) is adopted as the **default, most
+  successful distillation route to date (47.5 % closed-loop)**; the prune-then-heal route is deprioritized.
+
+### Round-2 (iterate DAgger from the 47.5 % policy) — regressed to 31.67 %
+
+**Setup.** Standard DAgger iteration on `expd`: re-collect on-policy states by rolling out the **47.5 % R1b
+policy** (4 suites × 10 tasks × 3 ep → 3320 relabeled states), merge the R1b ckpt to a plain init, and re-run
+the same AE-LoRA recipe (student LLM + context-proj AE-LoRA, KV-anchor on, 50/50 new-on-policy/demo, 6 k steps).
+Written under `expd/round2` so the 47.5 % R1b checkpoint is preserved.
+
+**Gate (120 ep).**
+
+| Suite | R1b (47.5 %) | **R2** | Δ |
+|---|---|---|---|
+| libero_spatial | 50.0 % | 50.0 % | 0 |
+| libero_object  | 80.0 % | 33.3 % | **−46.7** |
+| libero_goal    | 33.3 % | 36.7 % | +3.4 |
+| libero_10      | 26.7 % |  6.7 % | −20.0 |
+| **Overall**    | **47.5 %** | **31.67 %** | **−15.8** |
+
+**Outcome — naive iteration does NOT compound; R1b (47.5 %) remains the program best.** A full 6 k-step retrain
+from the merged R1b init, on *only* the newly-collected round-2 pool (no aggregation with round-1 data),
+regressed overall by ~16 pts, with the loss concentrated in the suites R1b was strongest on (object 80→33,
+libero_10 27→7) while held-out flow was actually *lower* (0.079). This is the classic non-aggregated-DAgger
+failure mode: retraining chases the newest on-policy distribution and **forgets** the competence encoded in the
+base, and the low flow loss (again) does not predict closed-loop success. Likely fixes for a future round-2:
+(a) **aggregate** round-1 + round-2 on-policy pools (true DAgger D←D∪new), (b) **fine-tune from the R1b
+checkpoint** with a lower LR / fewer steps instead of a fresh 6 k from the merged init, and/or (c) filter
+on-policy snapshots to successful/near-successful trajectories. For now the **47.5 % R1b checkpoint stands as the
+deliverable** (`dagger/expd/train_aelora/step_6000.pt`).
+
+---
+
 ## Key takeaways
 
 1. **Representational anchoring is the enabling lever.** A per-layer teacher-KV anchor on top of the flow
@@ -113,6 +358,13 @@ a from-scratch init + a fresh full training run. Deferred as a scope decision.
    velocity MSE, is the real metric.
 3. **The 25 % token stream is not the bottleneck.** The full-width teacher succeeds at 100 % through the exact
    reduced harness; aggressive width × token compression together exceed the small student's capacity.
+4. **Heal budget, not pruning, drove the curriculum 0 %.** A matched full-length anchored heal turns 0 % into
+   50 % at mild (1.13×) pruning — and the mildly pruned student beats the non-pruned control (50 % vs 20 %).
+5. **Co-adapting the full action expert does not help.** Experiment D freed the whole AE to co-train with the
+   student LLM; it hit the best flow loss on record (0.061) but the worst broad-suite rollout (Gate-1 5 %,
+   Gate-2 9.2 % after a real-data LoRA pass), underperforming the frozen-AE + KV-anchor recipe (30 %). More
+   trainable freedom moved us the *wrong* way; the bottleneck is the closed-loop covariate-shift gap, not model
+   capacity or the fine-tuning parameterization.
 
 ## Reproduction
 

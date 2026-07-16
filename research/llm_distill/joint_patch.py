@@ -44,6 +44,16 @@ class LoRALinear(nn.Module):
         upd = F.linear(F.linear(self.drop(x), self.lora_A), self.lora_B)
         return out + upd.to(out.dtype) * self.scaling
 
+    # proxy the wrapped weight/bias so code that introspects the linear (e.g. the ViT's
+    # ``device``/``dtype`` properties read patch_embedding.weight) keeps working when wrapped.
+    @property
+    def weight(self):
+        return self.base.weight
+
+    @property
+    def bias(self):
+        return self.base.bias
+
 
 def _module_dtype(m):
     for p in m.parameters():
@@ -53,12 +63,22 @@ def _module_dtype(m):
 
 def attach_student(policy, student, *, lora_rank=16, lora_alpha=16, lora_dropout=0.0,
                    free_teacher_transformer=True, student_dtype=None,
-                   anchor_weight=0.0, anchor_mode="both", anchor_beta=1.0):
-    """Attach the student, LoRA-adapt the action expert, freeze everything else.
+                   anchor_weight=0.0, anchor_mode="both", anchor_beta=1.0,
+                   train_action_expert=False, adapt_ae=None):
+    """Attach the student, adapt the action expert, freeze everything else.
 
     ``student_dtype`` controls the student's param dtype: None -> match the action expert
     (bf16); pass torch.float32 to keep fp32 master weights for stable AdamW (forward should
     then run under bf16 autocast). LoRA A/B always fp32.
+
+    Action-expert adaptation (two modes):
+      * ``train_action_expert=False`` (default): LoRA on ``context_{k,v}_proj`` only (the KV
+        interface); the rest of the action expert stays frozen. This is the 30%-success recipe.
+      * ``train_action_expert=True`` (Experiment D co-distillation): the WHOLE action-expert
+        body becomes trainable (self/cross-attn, MLP, final, time/action embeds, context proj).
+        The action expert is the teacher AE instance already loaded here, so it is exactly
+        "the student action expert, initialized from the teacher AE" -> then co-adapted. No
+        LoRA is inserted in this mode.
 
     Teacher-KV anchoring (hybrid representational term): when ``anchor_weight > 0`` the teacher
     transformer is kept RESIDENT (not freed) so ``student_joint_loss`` can source per-layer
@@ -66,7 +86,8 @@ def attach_student(policy, student, *, lora_rank=16, lora_alpha=16, lora_dropout
     (all 36 layers). ``anchor_mode`` in {cos, mse, both}; ``anchor_beta`` weights the
     magnitude (normalized-MSE) term when mode='both'.
 
-    Returns dict of trainable param groups: {"student": [...], "lora": [...]}.
+    Returns dict of trainable param groups: {"student": [...], "lora": [...],
+    "action_expert": [...]} (only groups that are actually trained are non-empty).
     """
     backbone = policy._backbone()
     ae = backbone._require_action_expert()
@@ -84,15 +105,33 @@ def attach_student(policy, student, *, lora_rank=16, lora_alpha=16, lora_dropout
         p.requires_grad = True
     policy.student_llm = student
 
-    # 3) LoRA on the action-expert context projections (the KV interface); A/B fp32
-    ae.context_k_proj = LoRALinear(ae.context_k_proj, lora_rank, lora_alpha, lora_dropout).to(dev)
-    ae.context_v_proj = LoRALinear(ae.context_v_proj, lora_rank, lora_alpha, lora_dropout).to(dev)
-    ae.context_k_proj.base.to(dt); ae.context_v_proj.base.to(dt)
+    # 3) action-expert adaptation -- adapt_ae in {full, lora, none}
+    #    full : whole AE trainable (Experiment D co-adaptation)
+    #    lora : LoRA on context_{k,v}_proj only (the 30% recipe / default)
+    #    none : AE fully frozen; only the student LLM trains (DAgger student-only recipe)
+    if adapt_ae is None:
+        adapt_ae = "full" if train_action_expert else "lora"
     lora_params = []
-    for proj in (ae.context_k_proj, ae.context_v_proj):
-        proj.lora_A.requires_grad = True
-        proj.lora_B.requires_grad = True
-        lora_params += [proj.lora_A, proj.lora_B]
+    ae_params = []
+    if adapt_ae == "full":
+        # full co-adaptation: the student action expert is the loaded teacher AE, now trainable.
+        ae.to(device=dev, dtype=sdt)
+        for p in ae.parameters():
+            p.requires_grad = True
+        ae_params = [p for p in ae.parameters() if p.requires_grad]
+    elif adapt_ae == "none":
+        # AE stays entirely frozen (bf16); nothing added -- student LLM is the only trainable group.
+        for p in ae.parameters():
+            p.requires_grad = False
+    else:
+        # LoRA on the action-expert context projections (the KV interface); A/B fp32
+        ae.context_k_proj = LoRALinear(ae.context_k_proj, lora_rank, lora_alpha, lora_dropout).to(dev)
+        ae.context_v_proj = LoRALinear(ae.context_v_proj, lora_rank, lora_alpha, lora_dropout).to(dev)
+        ae.context_k_proj.base.to(dt); ae.context_v_proj.base.to(dt)
+        for proj in (ae.context_k_proj, ae.context_v_proj):
+            proj.lora_A.requires_grad = True
+            proj.lora_B.requires_grad = True
+            lora_params += [proj.lora_A, proj.lora_B]
 
     # 4) anchoring config; keep teacher transformer resident iff we anchor to it
     anchoring = float(anchor_weight) > 0.0
@@ -118,7 +157,7 @@ def attach_student(policy, student, *, lora_rank=16, lora_alpha=16, lora_dropout
     policy._compute_flow_matching_loss_joint_per_layer = types.MethodType(student_joint_loss, policy)
 
     student_params = [p for p in student.parameters() if p.requires_grad]
-    return {"student": student_params, "lora": lora_params}
+    return {"student": student_params, "lora": lora_params, "action_expert": ae_params}
 
 
 def swap_student_for_eval(backbone, student):
@@ -154,10 +193,92 @@ def merge_lora_into(proj: nn.Linear, lora_A, lora_B, scaling):
     return proj
 
 
+# --------------------------------------------------------- generic LoRA on a subtree
+def wrap_linears_with_lora(root: nn.Module, *, rank=16, alpha=16, dropout=0.0):
+    """Replace every nn.Linear leaf inside ``root`` with a LoRALinear (in place). Returns the
+    list of new trainable LoRA params. Used for Phase-2 LoRA fine-tuning of the student LLM /
+    action expert / ViT (uniform, so save+eval are symmetric)."""
+    names = [n for n, m in root.named_modules()
+             if isinstance(m, nn.Linear) and not isinstance(m, LoRALinear)]
+    params = []
+    for name in names:
+        parent = root.get_submodule(name.rsplit(".", 1)[0]) if "." in name else root
+        leaf = name.rsplit(".", 1)[-1]
+        base = getattr(parent, leaf)
+        dev = base.weight.device
+        wrapped = LoRALinear(base, rank, alpha, dropout).to(dev)
+        setattr(parent, leaf, wrapped)
+        wrapped.lora_A.requires_grad = True
+        wrapped.lora_B.requires_grad = True
+        params += [wrapped.lora_A, wrapped.lora_B]
+    return params
+
+
+@torch.no_grad()
+def merge_lora_linears_(root: nn.Module):
+    """Fold every LoRALinear inside ``root`` back into a plain nn.Linear (in place), so the
+    module's state_dict matches the original unwrapped architecture (eval-ready)."""
+    names = [n for n, m in root.named_modules() if isinstance(m, LoRALinear)]
+    for name in names:
+        parent = root.get_submodule(name.rsplit(".", 1)[0]) if "." in name else root
+        leaf = name.rsplit(".", 1)[-1]
+        ll = getattr(parent, leaf)
+        base = ll.base
+        delta = (ll.lora_B.to(torch.float32) @ ll.lora_A.to(torch.float32)) * ll.scaling
+        base.weight.data.add_(delta.to(base.weight.dtype).to(base.weight.device))
+        setattr(parent, leaf, base)
+
+
+def attach_student_lora_finetune(policy, student, *, targets=("llm", "ae"),
+                                 lora_rank=16, lora_alpha=16, lora_dropout=0.0,
+                                 student_dtype=None):
+    """Phase-2 assembly: freeze the (Phase-1) student LLM + action expert + ViT bases and
+    LoRA-adapt the requested subtrees, then train on the base flow objective (anchor OFF).
+    ``targets`` subset of {llm, ae, vit}. Returns {"lora": [...]}.
+    """
+    backbone = policy._backbone()
+    ae = backbone._require_action_expert()
+    dev = next(ae.parameters()).device
+    dt = _module_dtype(ae)
+    sdt = student_dtype or dt
+
+    for p in policy.parameters():
+        p.requires_grad = False
+    student = student.to(device=dev, dtype=sdt)
+    for p in student.parameters():
+        p.requires_grad = False
+    policy.student_llm = student
+
+    lora_params = []
+    if "llm" in targets:
+        lora_params += wrap_linears_with_lora(student, rank=lora_rank, alpha=lora_alpha, dropout=lora_dropout)
+    if "ae" in targets:
+        lora_params += wrap_linears_with_lora(ae, rank=lora_rank, alpha=lora_alpha, dropout=lora_dropout)
+    if "vit" in targets:
+        vb = getattr(backbone, "vision_backbone", None)
+        if vb is not None:
+            lora_params += wrap_linears_with_lora(vb, rank=lora_rank, alpha=lora_alpha, dropout=lora_dropout)
+
+    # anchor OFF for the data fine-tune; free the teacher transformer blocks (unused) but keep wte
+    policy._anchor_cfg = {"enabled": False, "weight": 0.0, "mode": "both", "beta": 1.0}
+    policy._loss_components = {}
+    try:
+        for blk in backbone.transformer.blocks:
+            blk.to("meta")
+    except Exception:
+        pass
+    policy._compute_flow_matching_loss_joint_per_layer = types.MethodType(student_joint_loss, policy)
+    return {"lora": lora_params}
+
+
+_CFG_KEYS_EVAL = ("hidden", "num_heads", "intermediate", "num_layers", "num_kv_heads",
+                  "head_dim", "rope_theta", "teacher_hidden", "rms_eps", "use_qk_norm")
+
+
 @torch.no_grad()
 def load_student_and_merge_lora(policy, student, ckpt):
-    """Eval assembly: swap the (loaded) student into transformer + merge LoRA into the
-    action-expert context projections. ``ckpt`` is the trainer's saved dict."""
+    """Legacy eval assembly (context-proj LoRA deltas): swap the (loaded) student into
+    transformer + merge the action-expert context-proj LoRA. ``ckpt`` is the trainer's dict."""
     backbone = policy._backbone()
     ae = backbone._require_action_expert()
     swap_student_for_eval(backbone, student)
@@ -166,6 +287,62 @@ def load_student_and_merge_lora(policy, student, ckpt):
     merge_lora_into(ae.context_k_proj, lo["ck_A"], lo["ck_B"], scaling)
     merge_lora_into(ae.context_v_proj, lo["cv_A"], lo["cv_B"], scaling)
     return policy
+
+
+@torch.no_grad()
+def assemble_student_for_eval(policy, ckpt):
+    """Unified eval assembler across all checkpoint formats:
+      * phase='lora'    -> Phase-2: wrap {llm,ae,vit} bases with LoRA, load wrapped states, merge.
+      * has action_expert (no phase/lora) -> Phase-1 co-adapt: load plain student + AE states.
+      * else            -> legacy: plain student + context-proj LoRA deltas.
+    Returns (policy, student_module).
+    """
+    import student as S
+    scfg = {k: v for k, v in ckpt["cfg"].items() if k in _CFG_KEYS_EVAL}
+    stu, _ = S.build_student(scfg)
+    backbone = policy._backbone()
+    ae = backbone._require_action_expert()
+    dt = _module_dtype(ae)
+    phase = ckpt.get("phase", "legacy")
+
+    if phase == "lora":
+        targets = tuple(ckpt.get("lora_targets", ["llm", "ae"]))
+        r = int(ckpt.get("lora_rank", 16)); a = int(ckpt.get("lora_alpha", 16))
+        if "llm" in targets:
+            wrap_linears_with_lora(stu, rank=r, alpha=a)
+        stu.load_state_dict(ckpt["student"], strict=True)
+        merge_lora_linears_(stu)
+        stu = stu.to(dtype=dt)
+        swap_student_for_eval(backbone, stu)
+        if "ae" in targets:
+            wrap_linears_with_lora(ae, rank=r, alpha=a)
+            ae.load_state_dict(ckpt["action_expert"], strict=True)
+            merge_lora_linears_(ae)
+        elif ckpt.get("action_expert") is not None:
+            ae.load_state_dict(ckpt["action_expert"], strict=True)
+        vb = getattr(backbone, "vision_backbone", None)
+        if vb is not None and ckpt.get("vision_backbone") is not None:
+            if "vit" in targets:
+                wrap_linears_with_lora(vb, rank=r, alpha=a)
+                vb.load_state_dict(ckpt["vision_backbone"], strict=True)
+                merge_lora_linears_(vb)
+            else:
+                vb.load_state_dict(ckpt["vision_backbone"], strict=True)
+    elif ckpt.get("action_expert") is not None:
+        stu.load_state_dict(ckpt["student"], strict=True)
+        stu = stu.to(dtype=dt)
+        swap_student_for_eval(backbone, stu)
+        ae.load_state_dict(ckpt["action_expert"], strict=True)
+        vb = getattr(backbone, "vision_backbone", None)
+        if vb is not None and ckpt.get("vision_backbone") is not None:
+            vb.load_state_dict(ckpt["vision_backbone"], strict=True)
+    else:
+        stu.load_state_dict(ckpt["student"], strict=True)
+        stu = stu.to(dtype=dt)
+        load_student_and_merge_lora(policy, stu, ckpt)
+
+    policy.eval()
+    return policy, stu
 
 
 # --------------------------------------------------------------------------- loss

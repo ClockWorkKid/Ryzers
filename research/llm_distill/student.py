@@ -205,6 +205,7 @@ class StudentTextModel(nn.Module):
     def __init__(self, c: StudentConfig):
         super().__init__()
         self.c = c
+        self.grad_checkpoint = False   # set True to trade compute for activation memory (large students)
         self.down_proj = nn.Linear(c.teacher_hidden, c.hidden, bias=False)
         self.layers = nn.ModuleList(DecoderLayer(c) for _ in range(c.num_layers))
         self.rope = RotaryEmbedding(c.head_dim, c.rope_theta)
@@ -277,10 +278,17 @@ class StudentTextModel(nn.Module):
             from transformers.cache_utils import DynamicCache
             cache_obj = past_key_values if past_key_values is not None else DynamicCache()
 
+        use_ckpt = bool(getattr(self, "grad_checkpoint", False)) and self.training and x.requires_grad
         for li, layer in enumerate(self.layers):
             if output_hidden_states:
                 all_hidden += (x,)
-            x, (k, v) = layer(x, cos, sin, attn_mask)
+            if use_ckpt:
+                x, k, v = torch.utils.checkpoint.checkpoint(
+                    lambda _x, _c, _s, _m, _l=layer: (lambda o: (o[0], o[1][0], o[1][1]))(
+                        _l(_x, _c, _s, _m)),
+                    x, cos, sin, attn_mask, use_reentrant=False)
+            else:
+                x, (k, v) = layer(x, cos, sin, attn_mask)
             if collect_layer_kv_states:
                 collected.append((k, v))
             elif cache_obj is not None:
