@@ -1,0 +1,3 @@
+cosmos-framework upstream pin (github.com/NVIDIA/cosmos-framework): 0fa3ba479a7c1c5be28f81fe084b9ea544d697c9
+Weights: hf.co/nvidia/Cosmos3-Nano-Policy-DROID (OpenMDW-1.1). Dataset: hf.co/datasets/nvidia/Cosmos3-DROID.
+Simulator (deferred): github.com/NVlabs/RoboLab (Isaac Sim/Lab). ROCm-friendly closed-loop alt: upstream LIBERO HTTP server + packages/simulation/libero.

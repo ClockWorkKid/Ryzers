@@ -1,0 +1,151 @@
+{
+  "checkpoint": "/models/Cosmos3-Nano-Policy-DROID",
+  "dataset_root": "/models/cosmos3_droid/success",
+  "num_episodes": 10,
+  "queries_per_episode": 6,
+  "total_queries": 60,
+  "horizon": 32,
+  "action_dim": 8,
+  "num_steps": 4,
+  "seed": 0,
+  "overall_rmse_raw": 0.20174819768496507,
+  "per_dim_rmse_raw": {
+    "joint0": 0.10405984306868088,
+    "joint1": 0.23516430137709812,
+    "joint2": 0.10424330238458515,
+    "joint3": 0.20526010053118232,
+    "joint4": 0.20177050791341233,
+    "joint5": 0.2672307869740406,
+    "joint6": 0.17621666981905929,
+    "gripper": 0.2516220608705861
+  },
+  "per_dim_mae_raw": {
+    "joint0": 0.0633519039756114,
+    "joint1": 0.1563800825451229,
+    "joint2": 0.06112309373359797,
+    "joint3": 0.13926244927570225,
+    "joint4": 0.10100094181034365,
+    "joint5": 0.1257931222518285,
+    "joint6": 0.09894196245539509,
+    "gripper": 0.09438620094224462
+  },
+  "per_dim_rmse_norm": {
+    "joint0": 0.29439247712136557,
+    "joint1": 0.4642582935795149,
+    "joint2": 0.32923140294435876,
+    "joint3": 0.40567776891271556,
+    "joint4": 0.36697817457555526,
+    "joint5": 0.5641032782297851,
+    "joint6": 0.22235223690200362,
+    "gripper": 0.5685630192735703
+  },
+  "horizon_rmse": [
+    0.05685206087020501,
+    0.06786020343155444,
+    0.07677159802154661,
+    0.08620342180195716,
+    0.0957251610088549,
+    0.10552090627077299,
+    0.11659571261827678,
+    0.12565502143960727,
+    0.13671827623350416,
+    0.1432844540658348,
+    0.1504986076314404,
+    0.15765909302760228,
+    0.16319009611771101,
+    0.17076388773782433,
+    0.178882333621014,
+    0.18765242281571728,
+    0.19794703723805532,
+    0.20724693396399568,
+    0.21642931911184876,
+    0.2229471398236863,
+    0.22795671242915494,
+    0.2391502183444942,
+    0.24538713688972916,
+    0.24949727504710437,
+    0.2555262070101358,
+    0.26021552396698694,
+    0.26697461424306734,
+    0.27240000188731456,
+    0.28042252973782517,
+    0.2849786952782332,
+    0.2917732536124565,
+    0.29687083300160233
+  ],
+  "latency_s": {
+    "mean": 27.082161859671274,
+    "p50": 26.233372569084167,
+    "min": 26.06669783592224,
+    "max": 75.2118239402771,
+    "cold": 75.2118239402771
+  },
+  "peak_vram_gb": 33.2697728,
+  "per_episode": [
+    {
+      "episode": 0,
+      "queries": 6,
+      "rmse": 0.21409860747940226,
+      "task": "Pour the contents of the yellow cup into the bowl"
+    },
+    {
+      "episode": 1,
+      "queries": 6,
+      "rmse": 0.2350682170266914,
+      "task": "Pour the contents in the cup into the bowl"
+    },
+    {
+      "episode": 2,
+      "queries": 6,
+      "rmse": 0.1681535678996547,
+      "task": "Pour the contents of the cup into the bowl"
+    },
+    {
+      "episode": 3,
+      "queries": 6,
+      "rmse": 0.1335403891227873,
+      "task": "Pour the contents from the cup into the bowl"
+    },
+    {
+      "episode": 4,
+      "queries": 6,
+      "rmse": 0.13496014747141127,
+      "task": "Pour the contents from the cup into the ball"
+    },
+    {
+      "episode": 5,
+      "queries": 6,
+      "rmse": 0.1336201343905874,
+      "task": "Pour the contents in the yellow cup into the pink bowl"
+    },
+    {
+      "episode": 6,
+      "queries": 6,
+      "rmse": 0.20678533587064377,
+      "task": "Pour the contents in the grey measuring cup into the pink bowl"
+    },
+    {
+      "episode": 7,
+      "queries": 6,
+      "rmse": 0.27169634757129035,
+      "task": "Pour the contents of the cup into the bowl"
+    },
+    {
+      "episode": 8,
+      "queries": 6,
+      "rmse": 0.15895216929733166,
+      "task": "Pour the contents in the grey pot into the pink bowl"
+    },
+    {
+      "episode": 9,
+      "queries": 6,
+      "rmse": 0.28619217342030123,
+      "task": "Pour the contents of the grey pot in the peach bowl"
+    }
+  ],
+  "plots": [
+    "openloop_rmse_per_dim.png",
+    "openloop_rmse_vs_horizon.png",
+    "openloop_gt_vs_pred_sample.png"
+  ]
+}

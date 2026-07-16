@@ -1,0 +1,231 @@
+{
+  "checkpoint": "/models/Cosmos3-Nano-Policy-DROID",
+  "device": "Radeon 8060S Graphics",
+  "num_steps": 4,
+  "total_params": 15173136576,
+  "load_s": 19.009425401687622,
+  "clean_action_total_s": 26.05590271949768,
+  "hooked_action_total_s": 26.086806535720825,
+  "infer_peak_vram_gb": 33.2697728,
+  "components": [
+    {
+      "name": "sampler",
+      "class": "UniPCSampler",
+      "params": 0,
+      "calls": 1,
+      "incl_ms": 25814.625
+    },
+    {
+      "name": "net",
+      "class": "Cosmos3VFMNetwork",
+      "params": 15173136576,
+      "calls": 8,
+      "incl_ms": 25775.02099609375
+    }
+  ],
+  "hotspots": [
+    {
+      "name": "sampler",
+      "class": "UniPCSampler",
+      "self_s": 25.814625,
+      "calls": 1
+    },
+    {
+      "name": "net.language_model.model",
+      "class": "Qwen3VLTextModel",
+      "self_s": 24.68105293380469,
+      "calls": 8
+    },
+    {
+      "name": "net.time_embedder.mlp.2",
+      "class": "Linear",
+      "self_s": 0.9713689503669739,
+      "calls": 16
+    },
+    {
+      "name": "net.language_model.model.layers.7.mlp_moe_gen.down_proj",
+      "class": "Linear",
+      "self_s": 0.15098988342285155,
+      "calls": 8
+    },
+    {
+      "name": "net.language_model.model.layers.24.mlp_moe_gen.down_proj",
+      "class": "Linear",
+      "self_s": 0.15023673820495606,
+      "calls": 8
+    },
+    {
+      "name": "net.language_model.model.layers.6.mlp_moe_gen.down_proj",
+      "class": "Linear",
+      "self_s": 0.14943277168273925,
+      "calls": 8
+    },
+    {
+      "name": "net.language_model.model.layers.15.mlp_moe_gen.down_proj",
+      "class": "Linear",
+      "self_s": 0.1489374237060547,
+      "calls": 8
+    },
+    {
+      "name": "net.language_model.model.layers.16.mlp_moe_gen.down_proj",
+      "class": "Linear",
+      "self_s": 0.14883058547973632,
+      "calls": 8
+    },
+    {
+      "name": "net.language_model.model.layers.10.mlp_moe_gen.down_proj",
+      "class": "Linear",
+      "self_s": 0.14874855041503907,
+      "calls": 8
+    },
+    {
+      "name": "net.language_model.model.layers.35.mlp_moe_gen.down_proj",
+      "class": "Linear",
+      "self_s": 0.14868587684631349,
+      "calls": 8
+    },
+    {
+      "name": "net.language_model.model.layers.33.mlp_moe_gen.down_proj",
+      "class": "Linear",
+      "self_s": 0.14867518424987794,
+      "calls": 8
+    },
+    {
+      "name": "net.language_model.model.layers.34.mlp_moe_gen.down_proj",
+      "class": "Linear",
+      "self_s": 0.14856635856628417,
+      "calls": 8
+    },
+    {
+      "name": "net.language_model.model.layers.31.mlp_moe_gen.down_proj",
+      "class": "Linear",
+      "self_s": 0.1480829315185547,
+      "calls": 8
+    },
+    {
+      "name": "net.language_model.model.layers.20.mlp_moe_gen.down_proj",
+      "class": "Linear",
+      "self_s": 0.1476565742492676,
+      "calls": 8
+    },
+    {
+      "name": "net.language_model.model.layers.14.mlp_moe_gen.down_proj",
+      "class": "Linear",
+      "self_s": 0.14727303314208984,
+      "calls": 8
+    },
+    {
+      "name": "net.language_model.model.layers.4.mlp_moe_gen.down_proj",
+      "class": "Linear",
+      "self_s": 0.14720567321777345,
+      "calls": 8
+    },
+    {
+      "name": "net.language_model.model.layers.2.mlp_moe_gen.down_proj",
+      "class": "Linear",
+      "self_s": 0.14693496322631835,
+      "calls": 8
+    },
+    {
+      "name": "net.language_model.model.layers.32.mlp_moe_gen.down_proj",
+      "class": "Linear",
+      "self_s": 0.1466516990661621,
+      "calls": 8
+    },
+    {
+      "name": "net.language_model.model.layers.23.mlp_moe_gen.down_proj",
+      "class": "Linear",
+      "self_s": 0.14647600173950195,
+      "calls": 8
+    },
+    {
+      "name": "net.language_model.model.layers.5.mlp_moe_gen.down_proj",
+      "class": "Linear",
+      "self_s": 0.14635821533203125,
+      "calls": 8
+    },
+    {
+      "name": "net.language_model.model.layers.13.mlp_moe_gen.down_proj",
+      "class": "Linear",
+      "self_s": 0.14634390258789062,
+      "calls": 8
+    },
+    {
+      "name": "net.language_model.model.layers.25.mlp_moe_gen.down_proj",
+      "class": "Linear",
+      "self_s": 0.14620779228210448,
+      "calls": 8
+    },
+    {
+      "name": "net.language_model.model.layers.0.mlp_moe_gen.down_proj",
+      "class": "Linear",
+      "self_s": 0.14614230728149413,
+      "calls": 8
+    },
+    {
+      "name": "net.language_model.model.layers.3.mlp_moe_gen.down_proj",
+      "class": "Linear",
+      "self_s": 0.14611434555053712,
+      "calls": 8
+    },
+    {
+      "name": "net.language_model.model.layers.19.mlp_moe_gen.down_proj",
+      "class": "Linear",
+      "self_s": 0.14586862945556642,
+      "calls": 8
+    }
+  ],
+  "module_tree": [
+    {
+      "name": "net",
+      "class": "Cosmos3VFMNetwork",
+      "params": 15173136576,
+      "children": [
+        {
+          "name": "language_model",
+          "class": "Qwen3VLTextForCausalLM",
+          "params": 15136811008
+        },
+        {
+          "name": "time_embedder",
+          "class": "TimestepEmbedder",
+          "params": 17833984
+        },
+        {
+          "name": "vae2llm",
+          "class": "Linear",
+          "params": 790528
+        },
+        {
+          "name": "llm2vae",
+          "class": "Linear",
+          "params": 786624
+        },
+        {
+          "name": "action2llm",
+          "class": "DomainAwareLinear",
+          "params": 8519680
+        },
+        {
+          "name": "llm2action",
+          "class": "DomainAwareLinear",
+          "params": 8390656
+        }
+      ]
+    },
+    {
+      "name": "sampler",
+      "class": "UniPCSampler",
+      "params": 0,
+      "children": []
+    }
+  ],
+  "cfg": {
+    "action_dim": 8,
+    "action_chunk_size": 32,
+    "image_height": 540,
+    "image_width": 640,
+    "guidance": 3.0,
+    "shift": 5.0
+  }
+}
