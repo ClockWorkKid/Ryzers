@@ -1,0 +1,7 @@
+VERA upstream pin
+repo:   https://github.com/sizhe-li/VERA
+commit: fe8561aaa3783230d01d696987992f7eeacb2e12
+scoped: 2026-07-15 (Wave 2a era: DROID video generation released Jul 12, 2026)
+paper:  Turning Video Models into Generalist Robot Policies (arXiv 2605.27817)
+weights: https://huggingface.co/sizhe-lester-li/VERA
+license: MIT

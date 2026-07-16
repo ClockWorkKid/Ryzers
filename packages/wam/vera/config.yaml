@@ -1,0 +1,59 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# init_image omitted: ryzers defaults to the ROCm 7.2.2 base
+# (rocm/pytorch torch 2.10.0), which already ships the ROCm torch stack.
+
+build_arguments:
+- "VERA_COMMIT=fe8561aaa3783230d01d696987992f7eeacb2e12"
+
+gpu_support: true
+x11_display: false
+
+environment_variables:
+- "HSA_OVERRIDE_GFX_VERSION=11.5.1"
+- "HF_HOME=/root/.cache/huggingface"
+- 'HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET:-1}'
+- 'HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER:-0}'
+- 'HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT:-60}'
+- "HF_HUB_DISABLE_TELEMETRY=1"
+- "TOKENIZERS_PARALLELISM=false"
+# gfx1151 attention/decode tuning (matches the FastWAM/Cosmos3 Wan-on-ROCm findings):
+# AOTriton SDPA on, hipBLASLt off (else DiT attention stalls; Wan VAE conv3d decode misbehaves).
+- "TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1"
+- "TORCH_BLAS_PREFER_HIPBLASLT=0"
+- "OUT_DIR=/outputs"
+# VERA checkpoint locations (point at the mounted downloaded dirs; see scripts/download_checkpoints.sh).
+- 'VERA_CKPT_ROOT=${VERA_CKPT_ROOT:-/models/vera-ckpts}'
+- 'VERA_WAN_CKPT_ROOT=${VERA_WAN_CKPT_ROOT:-}'          # frozen Wan2.1-T2V-1.3B base (MimicGen)
+- 'VERA_WAN14B_CKPT_ROOT=${VERA_WAN14B_CKPT_ROOT:-}'    # frozen Wan2.1-I2V-14B-480P base (DROID/OMNI)
+- 'VERA_MIMICGEN_CKPT_DIR=${VERA_MIMICGEN_CKPT_DIR:-}'  # specialist DiT + flow decoder
+- 'VERA_DROID_CKPT_DIR=${VERA_DROID_CKPT_DIR:-}'        # DROID WAN planner (DiT + algo_config.yaml)
+# Per-demo knobs (override from host: VAR=... ryzers run /ryzers/demos/demo_*.sh).
+- 'HF_TOKEN=${HF_TOKEN:-}'
+- 'TEXT=${TEXT:-}'
+- 'NUM_STEPS=${NUM_STEPS:-}'
+- 'SEED=${SEED:-}'
+- 'TAG=${TAG:-}'
+- 'PORT=${PORT:-}'
+- 'VIS_PORT=${VIS_PORT:-}'
+- 'EMBODIMENT=${EMBODIMENT:-}'
+# Closed-loop knobs (MimicGen / PushT closed-loop demos).
+- 'NUM_DEMOS=${NUM_DEMOS:-}'
+- 'ROLLOUT_HORIZON=${ROLLOUT_HORIZON:-}'
+- 'RENDER_SIZE=${RENDER_SIZE:-}'
+- 'SAMPLE_STEPS=${SAMPLE_STEPS:-}'
+- 'ZARR_PATH=${ZARR_PATH:-}'
+- 'FRAME_INDICES=${FRAME_INDICES:-}'
+- 'N_REPEATS=${N_REPEATS:-}'
+- 'HORIZON=${HORIZON:-}'
+# img2vid knobs.
+- 'IMAGE=${IMAGE:-}'
+- 'VIEWS=${VIEWS:-}'
+
+volume_mappings:
+- "$PWD/workspace/vera/outputs:/outputs"
+- "$PWD/workspace/vera/models:/models"
+- "$PWD/workspace/.cache/huggingface:/root/.cache/huggingface"
+# cotracker (MimicGen motion tracker) is torch.hub-fetched once; persist it (rule 8).
+- "$PWD/workspace/vera/torch_cache:/root/.cache/torch"
