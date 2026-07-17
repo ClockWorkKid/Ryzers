@@ -23,6 +23,7 @@ These dockerfiles will also be pushed and actively maintained in their original 
 | VLM                     | [`Gemma3`](packages/vlm/gemma3), [`SmolVLM`](packages/vlm/smolvlm), [`Phi-4`](packages/vlm/phi4), [`LFM2-VL`](packages/vlm/lfm2vl) |
 | VLA                     | [`OpenVLA`](packages/vla/openvla), [`SmolVLA`](packages/vla/smolvla), [`GR00T-N1.5`](packages/vla/gr00t), [`openpi`](packages/vla/openpi), [`CogACT`](packages/vla/cogact), [`MolmoAct`](packages/vla/molmoact), [`MolmoAct2`](packages/vla/molmoact2), [`VLA-JEPA`](packages/vla/vlajepa) |
 | WAM                     | [`FastWAM`](packages/wam/fastwam), [`AHA-WAM`](packages/wam/ahawam), [`X-WAM`](packages/wam/xwam), [`VERA`](packages/wam/vera), [`Cosmos3-Nano`](packages/wam/cosmos3) |
+| WM                      | [`nano-world-model`](packages/wm/nano-world-model) |
 | Graphics                     | [`O3DE`](packages/graphics/o3de) |
 | Robotics                | [`ROS 2`](packages/ros/ros), [`Gazebo`](packages/ros/gazebo), [`LeRobot`](packages/robotics/lerobot), [`ACT`](packages/robotics/act), [`RAI`](packages/robotics/rai)    |
 | Simulation                |  [`Genesis`](packages/robotics/genesis), [`PyDrake`](packages/robotics/pydrake), [`LIBERO`](packages/simulation/libero), [`LIBERO-Plus`](packages/simulation/libero-plus), [`RoboTwin`](packages/simulation/robotwin), [`RoboCasa`](packages/simulation/robocasa), [`SimplerEnv`](packages/simulation/simplerenv)  |
@@ -30,26 +31,6 @@ These dockerfiles will also be pushed and actively maintained in their original 
 | Ryzen AI NPU                |  [`XDNA`](packages/npu/xdna), [`IRON`](packages/npu/iron), [`NPUEval`](packages/npu/npueval), [`Ryzen AI CVML`](packages/npu/ryzenai_cvml)  |
 | Adaptive SoCs           | [`PYNQ.remote`](packages/adaptive-socs/pynq-remote) |
 | Utilities   | [`JupyterLab`](packages/ide/jupyterlab), [`amdgpu_top`](packages/init/amdgpu_top) |
-
----
-
-## Simulation benchmark bases
-
-Closed-loop robot-manipulation benchmarks are packaged as **model-agnostic simulator base
-images** under `packages/simulation/`. Each ships a self-contained harness (closed-loop /
-interactive / sanity runners) and a `Policy` seam: a model layers on top with
-`ryzers build <sim-base> <model>` and plugs in through a runtime adapter selected by the
-`POLICY_FACTORY` environment variable. This keeps a single source of truth per simulator so
-every model consumes the same base (see [`packages/wam/fastwam`](packages/wam/fastwam) for the
-reference adapter pattern).
-
-| Simulator base | Backend | Description | Consumed by |
-|----------------|---------|-------------|-------------|
-| [`simulation/libero`](packages/simulation/libero) | MuJoCo | LIBERO manipulation suites (`libero_object/goal/spatial/10/90`) with interactive + closed-loop harness. | `wam/fastwam`, `vla/vlajepa`, `vla/molmoact2` |
-| [`simulation/libero-plus`](packages/simulation/libero-plus) | MuJoCo | LIBERO-Plus robustness benchmark: the four suites expanded into 10,030 perturbation instances across 7 dimensions × 5 difficulty levels. Harness synced to the `simulation/libero` base. | `vla/vlajepa` |
-| [`simulation/robotwin`](packages/simulation/robotwin) | SAPIEN / Vulkan | RoboTwin 2.0 dual-arm manipulation (PyTorch3D on ROCm/gfx1151). | `wam/fastwam`, `wam/ahawam`, `wam/xwam` |
-| [`simulation/robocasa`](packages/simulation/robocasa) | MuJoCo | RoboCasa kitchen manipulation (24 tasks, RoboSuite v1.5, OSC_POSE single-arm) with interactive + closed-loop harness. | `wam/xwam` |
-| [`simulation/simplerenv`](packages/simulation/simplerenv) | SAPIEN3 / ManiSkill3 | SimplerEnv real-to-sim (Google Robot + WidowX/Bridge), CPU physics. **Under development** — scaffold + `Policy` seam in place; gfx1151 render smoke pending. | `vla/vlajepa` (planned) |
 
 ---
 

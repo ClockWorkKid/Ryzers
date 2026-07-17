@@ -1,0 +1,20 @@
+Add the missing DataSource.get_seq_length() to PushTDataSource.
+
+rollout.py (and the sliced-dataset headroom filter) calls
+data_source.get_seq_length(traj_idx), which the sibling DinoWorldModelDataSource
+implements but PushTDataSource omits (the abstract base does not enforce it).
+Without this, DINO-WM PushT long-rollout crashes with AttributeError. This mirrors
+the sibling implementation exactly (self.seq_lengths is already populated).
+
+--- a/src/wm_datasets/data_source/dino_wm/pusht.py
++++ b/src/wm_datasets/data_source/dino_wm/pusht.py
+@@ -156,6 +156,9 @@
+     def get_num_trajectories(self) -> int:
+         return self.num_trajectories
+ 
++    def get_seq_length(self, index: int) -> int:
++        return int(self.seq_lengths[index].item())
++
+     @property
+     def action_dim(self) -> int:
+         return self._action_dim

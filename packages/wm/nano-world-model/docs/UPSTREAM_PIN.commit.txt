@@ -1,0 +1,5 @@
+nano-world-model upstream pin
+repo:   https://github.com/simchowitzlabpublic/nano-world-model
+commit: 2ee3c355a6e44d2254eba8a8c29f199adddf4a3e
+ref:    main (HEAD as of 2026-07-14 scoping)
+license: MIT

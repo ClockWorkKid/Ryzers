@@ -1,0 +1,56 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# init_image omitted: ryzers defaults to the ROCm 7.2.2 base
+# (rocm/pytorch), which already ships the ROCm torch stack.
+#
+# Env knobs validated on strix-halo (gfx1151) with the DINO-WM PushT rollout:
+#  * TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL + TORCH_BLAS_PREFER_HIPBLASLT=0 are REQUIRED —
+#    without them the DiT sampling attention path stalls (>100x slower).
+#  * MIOPEN_FIND_MODE=FAST avoids a multi-minute exhaustive conv search in the SD-VAE decode;
+#    the mounted MIOpen + triton caches persist compiled kernels across `ryzers run` calls.
+
+build_arguments:
+- "NANOWM_COMMIT=2ee3c355a6e44d2254eba8a8c29f199adddf4a3e"
+
+gpu_support: true
+x11_display: false
+
+environment_variables:
+- "HSA_OVERRIDE_GFX_VERSION=11.5.1"
+- "HF_HOME=/root/.cache/huggingface"
+- 'HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET:-1}'
+- 'HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER:-0}'
+- "HF_HUB_DISABLE_TELEMETRY=1"
+- "TOKENIZERS_PARALLELISM=false"
+- "TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1"
+- "TORCH_BLAS_PREFER_HIPBLASLT=0"
+- "MIOPEN_FIND_MODE=FAST"
+- "MIOPEN_USER_DB_PATH=/root/.cache/miopen"
+- "MIOPEN_CUSTOM_CACHE_DIR=/root/.cache/miopen"
+- "OUT_DIR=/outputs"
+# NanoWM upstream path config (see docs/config_system.md). Set at runtime to the mounted cache.
+- "RESULTS_DIR=/models/results"
+- "DATASET_DIR=/models/datasets/dino_wm"
+- "CSGO_DATA_DIR=/models/datasets/csgo"
+- "RT1_DATA_ROOT=/models/datasets/rt1_fractal"
+# Per-demo rollout knobs (override from the host: VAR=... ryzers run /ryzers/demos/demo_*.sh).
+- 'HF_TOKEN=${HF_TOKEN:-}'
+- 'DOMAIN=${DOMAIN:-}'
+- 'CKPT=${CKPT:-}'
+- 'CONFIG=${CONFIG:-}'
+- 'NUM_SAMPLES=${NUM_SAMPLES:-}'
+- 'ROLLOUT_LENGTH=${ROLLOUT_LENGTH:-}'
+- 'HISTORY_LENGTH=${HISTORY_LENGTH:-}'
+- 'NUM_SAMPLING_STEPS=${NUM_SAMPLING_STEPS:-}'
+- 'SCHEDULING_MODE=${SCHEDULING_MODE:-}'
+- 'FPS=${FPS:-}'
+- 'SEED=${SEED:-}'
+
+volume_mappings:
+- "$PWD/workspace/nanowm/outputs:/outputs"
+- "$PWD/workspace/nanowm/models:/models"
+- "$PWD/workspace/.cache/huggingface:/root/.cache/huggingface"
+# Persist JIT-compiled ROCm kernels so only the first run pays the compile cost.
+- "$PWD/workspace/.cache/triton:/root/.triton"
+- "$PWD/workspace/.cache/miopen:/root/.cache/miopen"
