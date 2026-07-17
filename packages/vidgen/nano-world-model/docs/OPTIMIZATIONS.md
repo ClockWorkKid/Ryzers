@@ -3,7 +3,7 @@
 Canonical record of the NanoWM inference optimizations for AMD Strix Halo (Ryzen AI Max 395+,
 gfx1151, ROCm PyTorch 2.10). Companion to `OPTIMIZATION_SCOPING.md` (the ranked opportunity map).
 All optimizations are inference-only and live as an override in
-`packages/wm/nano-world-model/patches/opt/` (`nanowm.py`, `rollout.py`, + test/compose scripts),
+`packages/vidgen/nano-world-model/patches/opt/` (`nanowm.py`, `rollout.py`, + test/compose scripts),
 gated so the upstream fp32 full-window path is preserved byte-for-byte.
 
 Target workload: sliding-window diffusion-forcing rollout (one frame generated per window, 50 DDIM

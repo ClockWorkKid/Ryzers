@@ -131,7 +131,7 @@ reference rollouts with SSIM/LPIPS (and FVD where feasible) before adoption.
 
 ## Round 1 — implemented + validated (A1 + A3 + A4 + B1)
 
-Implemented as an inference-only override (`packages/wm/nano-world-model/patches/opt/`): `nanowm.py`
+Implemented as an inference-only override (`packages/vidgen/nano-world-model/patches/opt/`): `nanowm.py`
 (A1 temp_embed slice, A3 precomputed RoPE cos/sin, A4 precomputed action_emb kwarg) and `rollout.py`
 (A1 causal window trim gated on `model.causal`, A4 embed-once-per-window, B1 `--dit_autocast bf16`,
 `--seed`, `--full_window`). All optimizations default OFF / full-window so the upstream fp32 path is

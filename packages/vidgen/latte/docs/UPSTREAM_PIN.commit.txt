@@ -1,0 +1,5 @@
+Vchitect/Latte upstream pin
+repo:   https://github.com/Vchitect/Latte
+commit: b27c24a17487e3c33ae4e92364521303d0f14845
+subject: Update eval_metrics.sh
+pinned:  Phase 0 (ROCm/gfx1151 port)

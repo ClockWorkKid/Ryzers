@@ -9,7 +9,7 @@ and only CUDA-specific pins are stripped.
 NanoWM predicts **future video frames autoregressively** from a short history of frames
 (encoded by a latent codec) plus optional actions — it is a pure **world model** (video
 prediction), *not* text-conditioned and *not* an action-policy head. It therefore lives in
-the new **`wm/`** category (world model), distinct from `wam/` (world-action) and `vla/`.
+the **`vidgen/`** category (video generation), alongside `latte` - distinct from `wam/` (world-action) and `vla/`.
 
 > **Status:** scaffold. Draft `Dockerfile`/`config.yaml`/`test.py` are placeholders pending
 > Phase-1 validation on Strix Halo (see `docs/nano-world-model/PLAN.md`). Do not assume they
