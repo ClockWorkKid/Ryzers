@@ -37,6 +37,17 @@ environment_variables:
 - 'SAMPLE_METHOD=${SAMPLE_METHOD:-}'
 - 'SEED=${SEED:-}'
 - 'PROMPT=${PROMPT:-}'
+# demo_t2v.sh knobs (all upstream generation controls).
+- 'STEPS=${STEPS:-}'
+- 'RESOLUTION=${RESOLUTION:-}'
+- 'FRAMES=${FRAMES:-}'
+- 'GUIDANCE=${GUIDANCE:-}'
+- 'METHOD=${METHOD:-}'
+- 'FPS=${FPS:-}'
+- 'TEMPORAL_VAE=${TEMPORAL_VAE:-}'
+- 'TEMPORAL_ATTN=${TEMPORAL_ATTN:-}'
+- 'FP16=${FP16:-}'
+- 'NUM_PER_PROMPT=${NUM_PER_PROMPT:-}'
 
 volume_mappings:
 - "$PWD/workspace/latte/outputs:/outputs"
