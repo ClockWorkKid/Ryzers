@@ -112,6 +112,36 @@ COTRACKER_VIS_NEW = (
     "                    visibility[batch_idx],\n"
 )
 
+# WebSocket keepalive on gfx1151. Upstream already raised the ping to 60s/600s (for the 14B
+# planner). But at the shipped sample_steps=40, a single closed-loop chunk occasionally stalls
+# well past 600s on gfx1151 (hipblaslt->unfused-cublas fallbacks + memory pressure), which trips
+# the keepalive mid-denoise ("sent 1011 keepalive ping timeout") and kills the whole episode — and
+# the EGL->osmesa retry can't reconnect because the single-threaded server is still finishing the
+# stalled chunk (handshake TimeoutError). The server DOES finish the chunk (just slowly), so we
+# disable keepalive on both ends: a merely-slow forward pass must not drop the connection. A truly
+# dead server still surfaces (localhost TCP close -> recv raises); the client's finite open_timeout
+# (PING_TIMEOUT_SECS) keeps a bad *initial* connect from hanging. Off the inference math entirely.
+WS_CLIENT_OLD = (
+    "PING_INTERVAL_SECS = 60\n"
+    "PING_TIMEOUT_SECS = 600\n"
+)
+WS_CLIENT_NEW = (
+    "# " + SENTINEL + " disable client keepalive (gfx1151 chunk stalls > 600s trip it); keep\n"
+    "# PING_TIMEOUT_SECS finite for the initial handshake open_timeout only.\n"
+    "PING_INTERVAL_SECS = None\n"
+    "PING_TIMEOUT_SECS = 600\n"
+)
+
+WS_SERVER_OLD = (
+    "            # long ping so slow WAN forward passes don't trip the keepalive\n"
+    "            ping_interval=60, ping_timeout=600,\n"
+)
+WS_SERVER_NEW = (
+    "            # " + SENTINEL + " disable server keepalive: a slow gfx1151 chunk blocks the\n"
+    "            # event loop > 600s, so the server would otherwise drop the client on pong timeout.\n"
+    "            ping_interval=None, ping_timeout=None,\n"
+)
+
 
 def _patch(path: Path, old: str, new: str) -> str:
     if not path.exists():
@@ -134,6 +164,10 @@ def main() -> int:
     print(_patch(tracker, TRACKER_OLD, TRACKER_NEW))
     cotracker = root / "vera" / "policy" / "world_models" / "cotracker_inference.py"
     print(_patch(cotracker, COTRACKER_VIS_OLD, COTRACKER_VIS_NEW))
+    ws_client = root / "vera" / "server" / "protocol" / "websocket_policy_client.py"
+    print(_patch(ws_client, WS_CLIENT_OLD, WS_CLIENT_NEW))
+    ws_server = root / "vera" / "server" / "protocol" / "websocket_policy_server.py"
+    print(_patch(ws_server, WS_SERVER_OLD, WS_SERVER_NEW))
     return 0
 
 

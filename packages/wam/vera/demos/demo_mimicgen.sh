@@ -16,8 +16,12 @@ set -uo pipefail
 
 : "${PORT:=8800}"
 : "${VIS_PORT:=8801}"
-: "${DATASET:=/models/mimicgen_datasets/core/stack_d0.hdf5}"
-: "${OUT_DIR:=/outputs/vera_mimicgen}"
+# TASK selects the MimicGen dataset; the released planner + taskbalanced IDM cover the 9 tasks:
+#   coffee_d0 coffee_d1 square_d0 square_d1 square_d2 stack_d0 stack_d1 stack_three_d0 stack_three_d1
+# Fetch them with scripts/download_mimicgen_datasets.sh (rule 8).
+: "${TASK:=stack_d0}"
+: "${DATASET:=/models/mimicgen_datasets/core/${TASK}.hdf5}"
+: "${OUT_DIR:=/outputs/vera_mimicgen/${TASK}}"
 : "${NUM_DEMOS:=3}"
 : "${ROLLOUT_HORIZON:=400}"
 : "${RENDER_SIZE:=128}"
@@ -29,6 +33,13 @@ set -uo pipefail
 ALGO_CONFIG="${ALGO_CONFIG:-$VERA_MIMICGEN_CKPT_DIR/algo_config.yaml}"
 export VERA_WAN_CKPT_ROOT VERA_MIMICGEN_CKPT_DIR VERA_MIMICGEN_DYNAMICS_CKPT
 mkdir -p "$OUT_DIR"
+
+if [ ! -f "$DATASET" ]; then
+  echo "[demo_mimicgen] dataset not found: $DATASET"
+  echo "[demo_mimicgen] fetch it first: ryzers run /ryzers/scripts/download_mimicgen_datasets.sh $TASK"
+  exit 1
+fi
+echo "[demo_mimicgen] TASK=$TASK DATASET=$DATASET"
 
 # Motion-tracker backend: the shipped algo_config has no `tracker:` block, so the WAN pipeline's
 # MotionTrackConfig defaults to backend="alltracker". alltracker is a vendored-only checkpoint

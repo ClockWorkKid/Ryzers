@@ -65,13 +65,21 @@ RUN git clone --depth 1 --branch v0.5.0 https://github.com/ARISE-Initiative/robo
 # reports 1.0.1). So we unpin mimicgen in the extra and install NVlabs/mimicgen from source with
 # --no-deps (its setup.py hard-pins old robomimic/robosuite/mujoco we don't want); `gdown` is the
 # one runtime import its file_utils needs. The unpinned `mimicgen` req is then satisfied by 1.0.1.
+#
+# We clone + install EDITABLE (`-e /repos/mimicgen`) rather than the `git+` form, because
+# mimicgen's per-task object XMLs + meshes (mimicgen/models/robosuite/assets/, ~12 MB, in-tree)
+# are NOT declared as package_data, so a `git+` build drops them and tasks that load a
+# mimicgen-specific object (e.g. coffee -> objects/coffee_pod.xml) crash with FileNotFoundError.
+# Editable keeps XML_ASSETS_BASE_PATH pointing into the clone where the assets live (rule 2.1).
+RUN git clone --depth 1 https://github.com/NVlabs/mimicgen.git /repos/mimicgen && \
+    test -f /repos/mimicgen/mimicgen/models/robosuite/assets/objects/coffee_pod.xml
 RUN python /ryzers/scripts/strip_cuda_torch.py /repos/vera/pyproject.toml && \
     sed -i -E 's/"mimicgen==1\.0\.0"/"mimicgen"/' /repos/vera/pyproject.toml && \
     grep -n "mimicgen" /repos/vera/pyproject.toml && \
     pip freeze | grep -iE "^(torch|torchvision|torchcodec)==" > /opt/vera-constraints.txt && \
     cat /opt/vera-constraints.txt && \
     PIP_CONSTRAINT=/opt/vera-constraints.txt pip install --no-cache-dir --no-deps -e /repos/robomimic && \
-    PIP_CONSTRAINT=/opt/vera-constraints.txt pip install --no-cache-dir --no-deps "git+https://github.com/NVlabs/mimicgen.git" && \
+    PIP_CONSTRAINT=/opt/vera-constraints.txt pip install --no-cache-dir --no-deps -e /repos/mimicgen && \
     PIP_CONSTRAINT=/opt/vera-constraints.txt pip install --no-cache-dir gdown && \
     PIP_CONSTRAINT=/opt/vera-constraints.txt pip install --no-cache-dir -e "/repos/vera[idm,video,eval]"
 
