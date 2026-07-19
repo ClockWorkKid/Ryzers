@@ -20,7 +20,9 @@ set -uo pipefail
 #   coffee_d0 coffee_d1 square_d0 square_d1 square_d2 stack_d0 stack_d1 stack_three_d0 stack_three_d1
 # Fetch them with scripts/download_mimicgen_datasets.sh (rule 8).
 : "${TASK:=stack_d0}"
-: "${DATASET:=/models/mimicgen_datasets/core/${TASK}.hdf5}"
+# Datasets are fetched by the simulation/mimicgen base into its /sim_data mount (rule 8).
+: "${MIMICGEN_DATASET_ROOT:=/sim_data/mimicgen_datasets}"
+: "${DATASET:=$MIMICGEN_DATASET_ROOT/core/${TASK}.hdf5}"
 : "${OUT_DIR:=/outputs/vera_mimicgen/${TASK}}"
 : "${NUM_DEMOS:=3}"
 : "${ROLLOUT_HORIZON:=400}"

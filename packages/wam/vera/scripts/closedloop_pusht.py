@@ -26,17 +26,27 @@ from pathlib import Path
 import numpy as np
 import torch
 
-HOST = os.environ.get("VERA_HOST", "127.0.0.1")
-PORT = int(os.environ.get("VERA_PORT", "8820"))
-VIS_PORT = int(os.environ.get("VIS_PORT", "8821"))
-ZARR_PATH = os.environ.get("ZARR_PATH", "/models/pusht/pusht_cchi_v7_replay.zarr")
-OUT_DIR = os.environ.get("OUT_DIR", "/outputs/vera_pusht")
-RENDER_SIZE = int(os.environ.get("RENDER_SIZE", "252"))
-HORIZON = int(os.environ.get("HORIZON", "200"))
-SUCCESS_THRESHOLD = float(os.environ.get("SUCCESS_THRESHOLD", "0.9"))
-SEED = int(os.environ.get("SEED", "42"))
-N_REPEATS = int(os.environ.get("N_REPEATS", "3"))
-N_STATES = int(os.environ.get("N_STATES", "100"))
+
+def _env(name: str, default: str) -> str:
+    # The ryzers run script threads knobs through as `-e VAR=${VAR:-}`, so an unset host var
+    # arrives as a present-but-EMPTY string (which os.environ.get would return over the default).
+    # Treat empty/whitespace as "use default" so a bare `ryzers run /ryzers/demos/demo_pusht.sh`
+    # works without having to export every knob.
+    v = os.environ.get(name, default)
+    return default if v is None or v.strip() == "" else v
+
+
+HOST = _env("VERA_HOST", "127.0.0.1")
+PORT = int(_env("VERA_PORT", "8820"))
+VIS_PORT = int(_env("VIS_PORT", "8821"))
+ZARR_PATH = _env("ZARR_PATH", "/models/pusht/pusht_cchi_v7_replay.zarr")
+OUT_DIR = _env("OUT_DIR", "/outputs/vera_pusht")
+RENDER_SIZE = int(_env("RENDER_SIZE", "252"))
+HORIZON = int(_env("HORIZON", "200"))
+SUCCESS_THRESHOLD = float(_env("SUCCESS_THRESHOLD", "0.9"))
+SEED = int(_env("SEED", "42"))
+N_REPEATS = int(_env("N_REPEATS", "3"))
+N_STATES = int(_env("N_STATES", "100"))
 ENV_THRESHOLD = 0.82  # env normalizes reward = clip(coverage / 0.82, 0, 1)
 
 _fi = os.environ.get("FRAME_INDICES", "3664").strip().lower()

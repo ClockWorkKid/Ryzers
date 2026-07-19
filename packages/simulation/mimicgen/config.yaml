@@ -1,0 +1,52 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# init_image omitted: ryzers defaults to the ROCm 7.2.2 base
+# (rocm/pytorch torch 2.10.0), which already ships the ROCm torch stack.
+# This is a model-agnostic simulator base; chain a policy on top with
+#   ryzers build simulation/mimicgen <policy>
+
+build_arguments:
+- "VERA_COMMIT=fe8561aaa3783230d01d696987992f7eeacb2e12"
+
+gpu_support: true
+x11_display: false
+
+environment_variables:
+- "HSA_OVERRIDE_GFX_VERSION=11.5.1"
+# MuJoCo renders headless via EGL on gfx1151 (osmesa software fallback available); the harness
+# / upstream controller also set these, exported here so a bare `ryzers run` inherits them.
+- "MUJOCO_GL=egl"
+- "PYOPENGL_PLATFORM=egl"
+- "TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1"
+- "TORCH_BLAS_PREFER_HIPBLASLT=0"
+- "HF_HUB_DISABLE_TELEMETRY=1"
+- "TOKENIZERS_PARALLELISM=false"
+# Distinct container targets (/sim_outputs, /sim_data) so this base's mounts never collide with a
+# policy layer's /outputs + /models when chained (ryzers concatenates volume mappings).
+- "OUT_DIR=/sim_outputs"
+# MimicGen task hdf5 live on the mounted volume (fetched at runtime with --local-dir, not baked;
+# rule 8). Distinct /sim_data target so it does not clash with a model layer's /models.
+- 'MIMICGEN_DATASET_ROOT=${MIMICGEN_DATASET_ROOT:-/sim_data/mimicgen_datasets}'
+# Sim/harness knobs (override from the host: VAR=... ryzers run /ryzers/demos/demo_*.sh).
+- 'TASK=${TASK:-}'
+- 'SEED=${SEED:-}'
+- 'NUM_DEMOS=${NUM_DEMOS:-}'
+- 'ROLLOUT_HORIZON=${ROLLOUT_HORIZON:-}'
+- 'RENDER_SIZE=${RENDER_SIZE:-}'
+- 'VIEWS=${VIEWS:-}'
+- 'CONTEXT_FRAMES=${CONTEXT_FRAMES:-}'
+- 'HF_TOKEN=${HF_TOKEN:-}'
+# Policy selection: module:function returning a sim_mimicgen.Policy (default RandomPolicy).
+# A model layer sets this to its adapter (or sim_mimicgen.remote_policy:build_policy for a
+# running policy server, with POLICY_HOST/POLICY_PORT).
+- 'POLICY_FACTORY=${POLICY_FACTORY:-}'
+- 'POLICY_HOST=${POLICY_HOST:-}'
+- 'POLICY_PORT=${POLICY_PORT:-}'
+
+# Only distinct targets here (mirrors simulation/libero): when a model is chained on top, its
+# /outputs + /models + HF-cache mounts are added without collision. The task hdf5 persist on
+# /sim_data via `hf download --local-dir`, so no HF-hub-cache mount is needed for re-runs.
+volume_mappings:
+- "$PWD/workspace/simulation-mimicgen/outputs:/sim_outputs"
+- "$PWD/workspace/simulation-mimicgen/data:/sim_data"

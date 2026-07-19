@@ -21,7 +21,9 @@ set -uo pipefail
 : "${ROLLOUT_HORIZON:=100}"
 : "${RENDER_SIZE:=128}"
 : "${OUT_ROOT:=/outputs/vera_mimicgen_suite}"
-: "${DATASET_ROOT:=/models/mimicgen_datasets/core}"
+# Datasets are fetched by the simulation/mimicgen base into its /sim_data mount (rule 8).
+: "${MIMICGEN_DATASET_ROOT:=/sim_data/mimicgen_datasets}"
+: "${DATASET_ROOT:=$MIMICGEN_DATASET_ROOT/core}"
 : "${VERA_WAN_CKPT_ROOT:=/models/wan2.1-t2v-1.3b}"
 : "${VERA_MIMICGEN_CKPT_DIR:=/models/vera-ckpts/mimicgen-wan-1.3b}"
 : "${VERA_MIMICGEN_DYNAMICS_CKPT:=/models/vera-ckpts/idm-mimicgen-285ouq1q/model.ckpt}"

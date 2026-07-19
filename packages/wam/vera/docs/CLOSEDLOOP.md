@@ -11,10 +11,14 @@ client  ──websocket :PORT──▶  start_vera_server (WAN planner + tracker
      robosuite+MuJoCo, offscreen EGL)      (obs | dream+tracks | dream | Jacobian)
 ```
 
-The image is the `.[idm,video,eval]` build (`Dockerfile`) — the planner+IDM video stack plus the
-MuJoCo sim stack (robosuite / robomimic / NVlabs-mimicgen / gym-pusht) and the EGL/OSMesa GL libs
-MuJoCo needs to render headless. Weights + frozen bases are fetched at runtime into the mounted
-caches (rule 8).
+Packaging: VERA is now the **model layer** (`.[idm,video]` — planner + IDM), built on top of the
+model-agnostic **`simulation/mimicgen`** base (robosuite / robomimic / NVlabs-mimicgen / MuJoCo +
+EGL/OSMesa GL libs + the `sim_mimicgen` harness): `ryzers build simulation/mimicgen vera`. PushT
+(`gym-pusht`, no MuJoCo) stays in the model image. For MimicGen the loop is split across the seam —
+VERA serves the WAN+IDM policy over the websocket protocol, and the sim base harness steps the env
+against it (`demos/demo_closedloop_mimicgen.sh`, `POLICY_FACTORY=vera_mimicgen_policy:build_policy`).
+`demos/demo_mimicgen.sh` still drives the same server through the upstream in-package controller
+directly. Weights + frozen bases are fetched at runtime into the mounted caches (rule 8).
 
 ---
 

@@ -16,22 +16,34 @@ future, and trains an embodiment-specific **inverse-dynamics model (IDM)** on th
 - **Jacobian IDM** (`vera.idm` + `vera.policy`) — data-efficient dream→actions translator on the
   **VGGT-1B** visual backbone; embodiment-specific, swappable without retraining the planner.
 
-It is a **slim planner+IDM+sim image**: `.[idm,video]` covers the video-generation path, and
-`.[eval]` adds the MuJoCo / robosuite / gym-pusht stacks (+ EGL/OSMesa GL libs) for headless
-closed-loop control. Weights and the frozen upstream bases (Wan2.1 T2V/I2V, VGGT-1B) are fetched at
-runtime into a mounted HF cache (rule 8).
+**Packaging (model / simulator split).** VERA is the **model layer**: this image installs only
+`.[idm,video]` (the WAN planner + VGGT Jacobian IDM) + the policy server + the DROID video-gen and
+PushT closed-loop paths. The MimicGen robosuite/MuJoCo simulator lives in a separate model-agnostic
+base, **`packages/simulation/mimicgen`** (robosuite/robomimic/NVlabs-mimicgen/MuJoCo + GL libs + the
+`sim_mimicgen` harness), which VERA builds **on top of**:
+
+```sh
+ryzers build simulation/mimicgen vera --name vera
+```
+
+The MimicGen closed loop is driven across the seam: VERA serves the WAN+IDM policy over the
+websocket protocol and the sim base's `sim_mimicgen` harness steps the env against it (via
+`POLICY_FACTORY=vera_mimicgen_policy:build_policy`). PushT (`gym-pusht`, no MuJoCo) and DROID
+video-gen stay wholly in this image. Weights and the frozen upstream bases (Wan2.1 T2V/I2V,
+VGGT-1B) are fetched at runtime into a mounted HF cache (rule 8).
 
 > **Status.** Video generation (Gates 1–3) and **closed-loop control (Phase 4)** landed:
 > ROCm import smoke, WAN-14B DROID generation, and closed-loop rollouts for **both** embodiments —
-> PushT (100% success) and MimicGen 2-block stacking (offscreen EGL). See `docs/PORT_SUMMARY.md`
-> for per-gate results, `docs/CLOSEDLOOP.md` for the closed-loop repro, and `docs/PLAN.md` for the
-> roadmap.
+> PushT (100% success) and MimicGen across its **full task range** (coffee / square / stack /
+> stack_three; a 1-demo sign-of-life pass ran 8/9 tasks end-to-end offscreen). See
+> `docs/PORT_SUMMARY.md` for per-gate results, `docs/CLOSEDLOOP.md` for the closed-loop repro, and
+> `docs/PLAN.md` for the roadmap.
 
 ### Build
 
 ```sh
-ryzers build vera --name vera          # builds on the ROCm 7.2.2 base
-ryzers run --name vera                 # test.py: ROCm torch + GPU + VERA import sign-of-life
+ryzers build simulation/mimicgen vera --name vera    # chain: MimicGen sim base -> VERA model layer
+ryzers run --name vera                                # test.py: ROCm torch + GPU + VERA import sign-of-life
 ryzers run --name vera python /ryzers/test_eval.py   # + MuJoCo/robosuite import & EGL offscreen render
 ```
 
@@ -56,19 +68,28 @@ run also dumps a `*_vis.mp4` of the viewer buffer.
 | `demos/demo_videogen.sh` | DROID ckpts | DROID WAN-14B language-conditioned video generation (no sim). |
 | `demos/demo_img2vid.sh` | DROID ckpts | Image→video: one still primed across the context window, planner dreams the rollout. |
 | `demos/demo_pusht.sh` | wave1 + PushT zarr | PushT closed-loop (DFoT planner + Jacobian IDM, no MuJoCo). |
-| `demos/demo_mimicgen.sh` | wave1 + `stack_d0` | MimicGen 2-block stack closed-loop (robosuite/MuJoCo, offscreen EGL). |
+| `demos/demo_closedloop_mimicgen.sh` | wave1 + `TASK` hdf5 | **MimicGen closed-loop via the model/sim seam** — starts the VERA server, drives the `simulation/mimicgen` base harness against it. Preferred. |
+| `demos/demo_mimicgen.sh` | wave1 + `TASK` hdf5 | Single MimicGen task closed-loop via the upstream in-package controller directly (EGL→OSMesa). |
+| `demos/demo_mimicgen_suite.sh` | wave1 + all 9 hdf5 | Full 9-task MimicGen suite against one warm server (per-task EGL→OSMesa retry). |
 
 ```sh
 # PushT closed-loop (server + client + recorder in one container):
 ryzers run --name vera /ryzers/demos/demo_pusht.sh
-# MimicGen closed-loop — short viewer clip (1 demo × 50 steps ≈ 15 min on gfx1151):
-NUM_DEMOS=1 ROLLOUT_HORIZON=50 ryzers run --name vera /ryzers/demos/demo_mimicgen.sh
+# MimicGen task datasets (9 core-task hdf5 from amandlek/mimicgen_datasets, rule 8) — the script
+# ships in the simulation/mimicgen base and writes to its /sim_data mount:
+ryzers run --name vera /ryzers/scripts/download_mimicgen_datasets.sh
+# MimicGen closed-loop via the model/sim seam — short viewer clip for one task:
+TASK=stack_d0 NUM_DEMOS=1 ROLLOUT_HORIZON=100 ryzers run --name vera /ryzers/demos/demo_closedloop_mimicgen.sh
+# MimicGen full suite (all 9 tasks, one warm server; sign-of-life ≈ 3.7–5 h):
+NUM_DEMOS=1 ROLLOUT_HORIZON=100 ryzers run --name vera /ryzers/demos/demo_mimicgen_suite.sh
 ```
 
 ### Useful knobs
 
 - `PORT` / `VIS_PORT` — policy websocket + MJPEG viewer ports (PushT 8820/8821, MimicGen 8800/8801).
-- MimicGen: `NUM_DEMOS`, `ROLLOUT_HORIZON`, `RENDER_SIZE`, `SAMPLE_STEPS` (denoise steps, default 10).
+- MimicGen: `TASK` (which core task, e.g. `stack_d0`/`coffee_d0`/`square_d0`/`stack_three_d0`),
+  `NUM_DEMOS`, `ROLLOUT_HORIZON`, `RENDER_SIZE`, `SAMPLE_STEPS` (denoise steps, default 10).
+  Depth vs. wall-time on one gfx1151 is steep (~142 s/chunk = 10 steps) — see `docs/CLOSEDLOOP.md`.
 - PushT: `ZARR_PATH`, `FRAME_INDICES`, `N_REPEATS`, `HORIZON`, `SEED`.
 - Video-gen: `TEXT`, `NUM_STEPS`, `SEED`, `IMAGE`/`VIEWS` (img2vid).
 - `HF_TOKEN` for faster/gated downloads.
