@@ -128,6 +128,11 @@ def main():
     temporal_vae = args.temporal_vae
     if temporal_vae is None:
         temporal_vae = args.frames > 1  # video benefits from the temporal decoder
+    if temporal_vae and args.frames > 1:
+        # gfx1151: the SVD temporal decoder is ~184x slower than per-frame SD-VAE decode
+        # (see docs/OPTIMIZATIONS.md R0) but temporally smoother on high-frequency texture.
+        print("[note] temporal VAE decoder ON (smoothest; ~180x slower decode on gfx1151). "
+              "Pass --no-temporal-vae (TEMPORAL_VAE=0) for ~3.4x faster clips.", flush=True)
 
     torch.set_grad_enabled(False)
     device = "cuda" if torch.cuda.is_available() else "cpu"

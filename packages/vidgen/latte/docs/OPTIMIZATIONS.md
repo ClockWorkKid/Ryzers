@@ -49,10 +49,11 @@ SDPA stays ~314, so **SDPA is the robust best regardless of the BLAS path**.
    The fix ships in `patches/rocm_port.py`. With it, SDPA is an **exact drop-in** for `math` and
    **~1.8× faster** at fp16 (569 → 311 ms).
 
-3. **VAE decode precision & batch.** fp32 SD-VAE decode hits a pathologically slow MIOpen conv
-   fallback on gfx1151; run the VAE in **fp16** (per-frame encode ≈ 26 ms). The decoder's MIOpen
-   algo choice is **batch-dependent** — decode all frames of a sample in one call (large batch)
-   to avoid the slow small-batch path. `demos/_gen_frames.py` and the demos already do both.
+3. **VAE decode precision.** fp32 SD-VAE decode hits a pathologically slow MIOpen conv
+   fallback on gfx1151; run the VAE in **fp16**. The MIOpen algo choice is also
+   **batch-dependent** — but see **R0** below: for the 512×512 T2V SD-VAE the fast path is
+   **per-frame (batch=1, ≈0.14 s/frame)**, while batching all frames in one call is
+   *pathological* (392 s). Upstream `decode_latents` already decodes per-frame.
 
 4. **DDIM step reduction.** The class configs default to 250 DDPM steps; sampling cost is linear
    in steps, so 250 → 50 DDIM is a ~5× wall-clock cut. (Perceptual-quality lever; validate per
@@ -79,6 +80,37 @@ The residual is fp16 fused-vs-unfused accumulation only; the optimized path is q
 fp32+math baseline `4789 ms/forward` → fp16+SDPA `311 ms/forward` = **~15× faster DiT**, quality
 neutral. A 16-frame Sky sample at 50 DDIM steps then spends ~16 s in the DiT loop plus VAE
 decode, versus minutes for the fp32+math baseline.
+
+## R0 — T2V decode profiling (Latte-1, 512×512 / 16f / 50-step DDIM, fp16+SDPA)
+
+End-to-end split of one **T2V** clip (diffusion isolated via `output_type='latents'`, then
+each decode path timed on the *same* latents; steady-state, kernels cached):
+
+| Stage | Steady time | Note |
+|---|---|---|
+| Diffusion (50-step DDIM) | **168 s** (3.37 s/step) | now the dominant cost |
+| Decode — plain SD-VAE, **per-frame** | **2.3 s** | upstream `decode_latents` (batch=1) |
+| Decode — plain SD-VAE, batched-16 | 392 s | ⚠️ pathological MIOpen conv at 512² |
+| Decode — SVD temporal, chunk-14 | **416 s** | `decode_latents_with_temporal_decoder` |
+
+The SVD temporal decoder is **~71% of a clip** and **~184× slower** than per-frame plain
+decode. Using plain decode cuts a clip **~585 s → ~171 s (3.4× end-to-end)**, after which
+diffusion dominates (a future round).
+
+**Quality (same latents, temporal vs plain per-frame).** Spatially identical; temporal
+flicker proxy = mean |f[t+1]−2f[t]+f[t−1]| (lower = smoother):
+
+| Clip | temporal | plain | ratio |
+|---|---|---|---|
+| fox in snow (moderate motion) | 11.71 | 12.47 | **1.06×** (indistinguishable) |
+| waterfall (busy texture) | 6.03 | 8.84 | **1.47×** (plain jitters more) |
+
+So plain per-frame is quality-equivalent for most content; the temporal decoder earns its
+cost only on high-frequency textured motion (water/fire/foliage).
+
+**Policy.** The temporal decoder stays the **default for video** (quality-first); use
+`--no-temporal-vae` (`TEMPORAL_VAE=0`) for a **3.4× faster** preview / most content. (TAESDV
+— a tiny temporal decoder for fast *and* smooth — is a candidate for a later round.)
 
 ## Environment knobs (validated, see `config.yaml`)
 
