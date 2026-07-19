@@ -1,0 +1,9 @@
+bytedance/GR-1
+https://github.com/bytedance/GR-1
+commit 4a2e956bb497586d82489eb4c98b27fb82b5ff47  (main, pinned)
+
+Weights (fetched at runtime, not re-hosted — rule 8):
+  MAE ViT-B/16  https://dl.fbaipublicfiles.com/mae/pretrain/mae_pretrain_vit_base.pth
+  GR-1 ABCD-D   https://lf-robot-opensource.bytetos.com/obj/lab-robot-public/gr1_code_release/snapshot_ABCD.pt
+  GR-1 ABC-D    https://lf-robot-opensource.bytetos.com/obj/lab-robot-public/gr1_code_release/snapshot_ABC.pt
+  CLIP ViT-B/32 fetched automatically by clip.load(...)
