@@ -1,0 +1,6 @@
+AMD-AGI/Micro-World upstream pin
+repo:    https://github.com/AMD-AGI/Micro-World
+commit:  e63369c88e036756285b089ecc67841c426a7b1b
+branch:  main
+subject: Micro-World (Wan2.1 / VideoX-Fun action-controlled interactive world model)
+pinned:  Phase 0 (ROCm/gfx1151 port; Strix Halo, ROCm 7.2.2, ryzer_env base)

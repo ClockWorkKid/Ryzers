@@ -1,0 +1,70 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# init_image omitted: ryzers defaults to the ROCm 7.2.2 base (rocm/pytorch torch 2.10.0),
+# which already ships the ROCm torch stack. Same base + gfx1151 env as the Latte/VERA ports.
+#
+# Env knobs validated on Strix Halo (gfx1151) for the Wan2.1 DiT sampling + conv3d VAE path:
+#  * TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL + TORCH_BLAS_PREFER_HIPBLASLT=0 are REQUIRED — without
+#    them the DiT SDPA attention path stalls badly on gfx1151.
+#  * MIOPEN_FIND_MODE=FAST avoids a multi-minute exhaustive conv search in the conv3d VAE decode;
+#    the mounted MIOpen + triton caches persist compiled kernels across `ryzers run` calls.
+
+build_arguments:
+- "MICRO_WORLD_COMMIT=e63369c88e036756285b089ecc67841c426a7b1b"
+
+gpu_support: true
+x11_display: false
+
+environment_variables:
+- "HSA_OVERRIDE_GFX_VERSION=11.5.1"
+- "HF_HOME=/root/.cache/huggingface"
+- 'HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET:-1}'
+- 'HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER:-0}'
+- "HF_HUB_DISABLE_TELEMETRY=1"
+- "TOKENIZERS_PARALLELISM=false"
+- "TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1"
+- "TORCH_BLAS_PREFER_HIPBLASLT=0"
+- "MIOPEN_FIND_MODE=FAST"
+- "MIOPEN_USER_DB_PATH=/root/.cache/miopen"
+- "MIOPEN_CUSTOM_CACHE_DIR=/root/.cache/miopen"
+- "OUT_DIR=/outputs"
+- "MODELS_DIR=/models"
+- "CONFIG=/repos/micro-world/config/wan2.1/wan_civitai.yaml"
+# Per-demo generation knobs (override from the host: VAR=... ryzers run /ryzers/demos/demo_*.sh).
+- 'HF_TOKEN=${HF_TOKEN:-}'
+- 'PROMPT=${PROMPT:-}'
+- 'NEGATIVE_PROMPT=${NEGATIVE_PROMPT:-}'
+- 'ACTION_LIST=${ACTION_LIST:-}'
+- 'REF_IMAGE=${REF_IMAGE:-}'
+- 'GPU_MEMORY_MODE=${GPU_MEMORY_MODE:-}'
+- 'SAMPLER=${SAMPLER:-}'
+- 'SHIFT=${SHIFT:-}'
+- 'SAMPLE_SIZE=${SAMPLE_SIZE:-}'
+- 'VIDEO_LENGTH=${VIDEO_LENGTH:-}'
+- 'FPS=${FPS:-}'
+- 'GUIDANCE_SCALE=${GUIDANCE_SCALE:-}'
+- 'SEED=${SEED:-}'
+- 'NUM_STEPS=${NUM_STEPS:-}'
+- 'TEACACHE=${TEACACHE:-}'
+- 'TEACACHE_THRESHOLD=${TEACACHE_THRESHOLD:-}'
+- 'NUM_SKIP_START_STEPS=${NUM_SKIP_START_STEPS:-}'
+- 'CFG_SKIP_RATIO=${CFG_SKIP_RATIO:-}'
+# gfx1151 conv3d override (default on): routes the WAN VAE conv3d via ATen im2col+GEMM. Set 0 to
+# restore stock MIOpen conv. See RUNTIME_OPTIMIZATION.md (VAE ~1.49x; total small on the DiT-bound path).
+- 'MW_DISABLE_CUDNN=${MW_DISABLE_CUDNN:-1}'
+- 'TRAIN_MODE=${TRAIN_MODE:-}'
+- 'TRANSFORMER_PATH=${TRANSFORMER_PATH:-}'
+- 'LORA_PATH=${LORA_PATH:-}'
+- 'LORA_WEIGHT=${LORA_WEIGHT:-}'
+- 'BASE_MODEL=${BASE_MODEL:-}'
+# Optional: force the attention backend (default falls back to torch SDPA on gfx1151).
+- 'VIDEOX_ATTENTION_TYPE=${VIDEOX_ATTENTION_TYPE:-}'
+
+volume_mappings:
+- "$PWD/workspace/micro-world/outputs:/outputs"
+- "$PWD/workspace/micro-world/models:/models"
+- "$PWD/workspace/.cache/huggingface:/root/.cache/huggingface"
+# Persist JIT-compiled ROCm kernels so only the first run pays the compile cost.
+- "$PWD/workspace/.cache/triton:/root/.triton"
+- "$PWD/workspace/.cache/miopen:/root/.cache/miopen"

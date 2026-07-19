@@ -268,5 +268,26 @@ specific negatives**, not universal — re-evaluate on different hardware or a l
   it was big for FastWAM (long UMT5 text tokens) but ~5 % here because MimicGen skips the text
   encoder. Match this lever to models with substantial constant cross-attn context.
 
+### Micro-World (Wan2.1 action-controlled world model, T2W 1.3B / I2W 14B) — t2v proxy, gfx1151
+- **Net shipped: TeaCache 1.51× @ 23 dB (thr 0.10) up to 2.09× (thr 0.20) + conv override 1.49× on
+  the VAE**, default-on. Baked in `packages/vidgen/micro-world/demos/mw_generate.py`
+  (`apply_gfx1151_speedups()` + per-mode TeaCache thresholds); kill-switches `MW_DISABLE_CUDNN=0`,
+  `TEACACHE=0`. Gate-3 validated (all 4 example modes produce coherent action-following videos).
+- **Bottleneck class: DiT-denoise-loop / video-self-attention bound.** Component split (t2v-1.3B,
+  30-step UniPC, 25f/256×448): **WAN DiT 92.7 % (52.2 s)** · WAN VAE conv3d 5.5 % · T5 1.8 %; peak 18 GB.
+- Wins: **built-in TeaCache** (residual step-skip, §2.1) is the mover here — thr 0.10 → 1.51× @ 23 dB,
+  thr 0.20 → 2.09× @ 20.3 dB; **fewer steps** 30→20 = 1.45×, 30→10 = 2.62× (UniPC). **conv override**
+  = 1.49× on the VAE decode only (total 1.02× on t2v — grows on the 49-frame image paths).
+- Evaluated, **not adopted**: **cross-attn K/V cache** (§2.1) — **bit-exact (max\|Δ\|=0.0) but 1.00×**;
+  the DiT is video-self-attn bound and the (image+T5) cross-attn context is small vs the video tokens.
+  Prototype retained in `scripts/opt_ab_microworld.py` (`kv=True`).
+- Open levers: **cfg_skip** (built-in, skips the uncond DiT branch on later steps — compounds with
+  TeaCache, validate jointly); distillation / consistency schedule (compute-bound escape, §2.6).
+- **Lesson (contrast with VERA):** *same* WAN conv3d VAE, *opposite* bottleneck — VERA was
+  conv-dominated (conv override 8.8×), Micro-World is DiT-self-attn dominated (conv override VAE-only,
+  step-skip/step-count are the movers). Confirms the §2.1 rule again: the cross-attn K/V cache's payoff
+  tracks cross-attn context length, which is small relative to the video self-attention here. **Always
+  profile the split before picking the lever.**
+
 ### (template for the next model)
 - Net shipped: … / bottleneck class: … / structural wins (decoder skip, caches): … / evaluated-not-adopted: … / open levers: …
