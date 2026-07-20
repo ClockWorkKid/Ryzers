@@ -1,0 +1,18 @@
+flow-diffusion/AVDC_experiments   (primary: model + vendored Meta-World sim + closed-loop/unimatch)
+https://github.com/flow-diffusion/AVDC_experiments
+commit e9b5b0098e59da0e1fe24a18ed9bec5b825e2ca2  (main, pinned)
+
+flow-diffusion/AVDC               (training-only reference)
+https://github.com/flow-diffusion/AVDC
+commit 176fbe1352a869d77855fe17ab0ddc82c440dc4b  (main, pinned)
+
+Upstream this codebase is modified from (vendored inside the repos):
+  unimatch        https://github.com/autonomousvision/unimatch      (dense optical flow -> actions)
+  imagen-pytorch  https://github.com/lucidrains/imagen-pytorch      (GoalGaussianDiffusion)
+  guided-diffusion https://github.com/openai/guided-diffusion       (3D UNetModel, task-token variant)
+
+Weights (fetched at runtime, not re-hosted - rule 8): HF Po-Chen/flowdiffusion
+  Meta-World      https://huggingface.co/Po-Chen/flowdiffusion/resolve/main/ckpts/metaworld/model-24.pt
+  Meta-World (DA) https://huggingface.co/Po-Chen/flowdiffusion/resolve/main/ckpts/metaworld_DA/model-24.pt
+  iTHOR           https://huggingface.co/Po-Chen/flowdiffusion/resolve/main/ckpts/ithor/model-16.pt
+  CLIP ViT-B/32   openai/clip-vit-base-patch32 (transformers CLIPTextModel, auto-downloaded)

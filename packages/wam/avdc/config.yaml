@@ -1,0 +1,69 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# init_image omitted: ryzers defaults to the ROCm 7.2.2 base
+# (rocm/pytorch torch 2.10.0), which already ships the ROCm torch stack.
+#
+# Env knobs validated on Strix Halo (gfx1151) for the ROCm diffusion/attention path:
+#  * TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL + TORCH_BLAS_PREFER_HIPBLASLT=0 keep the attention
+#    matmul path stable on gfx1151.
+#  * MIOPEN_FIND_MODE=FAST avoids a multi-minute exhaustive conv search in the 3D UNet convs;
+#    the mounted MIOpen + triton caches persist compiled kernels across `ryzers run` calls.
+
+build_arguments:
+- "AVDC_COMMIT=e9b5b0098e59da0e1fe24a18ed9bec5b825e2ca2"
+
+gpu_support: true
+x11_display: false
+
+environment_variables:
+- "HSA_OVERRIDE_GFX_VERSION=11.5.1"
+- "HF_HOME=/root/.cache/huggingface"
+- 'HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET:-1}'
+- 'HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER:-0}'
+- "HF_HUB_DISABLE_TELEMETRY=1"
+- "TOKENIZERS_PARALLELISM=false"
+- "TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1"
+- "TORCH_BLAS_PREFER_HIPBLASLT=0"
+# NORMAL lets MIOpen search+cache good conv kernels (huge win for the 3D UNet / flow model on
+# gfx1151 vs immediate-mode FAST); cached in the mounted MIOpen dir so only the first run pays it.
+- 'MIOPEN_FIND_MODE=${MIOPEN_FIND_MODE:-NORMAL}'
+- "MIOPEN_USER_DB_PATH=/root/.cache/miopen"
+- "MIOPEN_CUSTOM_CACHE_DIR=/root/.cache/miopen"
+# Phase-4 inference optimizations (measured ~31x faster video gen on gfx1151), opt-out via env.
+# fp16 autocast for sampling + torch.compile the 3D UNet. Quality-gated (open-loop + closed-loop).
+- 'AVDC_AMP=${AVDC_AMP:-fp16}'
+- 'AVDC_COMPILE=${AVDC_COMPILE:-1}'
+- 'AVDC_COMPILE_MODE=${AVDC_COMPILE_MODE:-default}'
+# Persist the torch.compile (inductor) cache so the ~5 min compile warmup is paid only on the
+# first run, not every container / benchmark task process.
+- "TORCHINDUCTOR_CACHE_DIR=/root/.cache/torchinductor"
+- "OUT_DIR=/outputs"
+- "MODELS_DIR=/models"
+# Which pretrained AVDC checkpoint set to fetch/use (metaworld | metaworld-DA | ithor | all).
+- 'WHICH=${WHICH:-}'
+# Open-loop video-prediction demo knobs (phase 2). CKPT_DIR/MILESTONE select the snapshot dir
+# (Trainer.load reads $CKPT_DIR/model-$MILESTONE.pt); FLOW=1 uses the optical-flow UNet variant.
+- 'CKPT_DIR=${CKPT_DIR:-/models/metaworld}'
+- 'MILESTONE=${MILESTONE:-24}'
+- 'IMAGE=${IMAGE:-}'
+- 'TEXT=${TEXT:-}'
+- 'SAMPLE_STEPS=${SAMPLE_STEPS:-}'
+- 'GUIDANCE=${GUIDANCE:-}'
+- 'FLOW=${FLOW:-}'
+- 'SEED=${SEED:-}'
+# Closed-loop Meta-World demo knobs (phase 3). Rendering is headless EGL on the iGPU.
+- "MUJOCO_GL=egl"
+- 'ENV_NAME=${ENV_NAME:-}'
+- 'CAMERA=${CAMERA:-}'
+- 'MAX_REPLANS=${MAX_REPLANS:-}'
+
+volume_mappings:
+- "$PWD/workspace/avdc/outputs:/outputs"
+- "$PWD/workspace/avdc/models:/models"
+- "$PWD/workspace/avdc/data:/data"
+- "$PWD/workspace/.cache/huggingface:/root/.cache/huggingface"
+# Persist JIT-compiled ROCm kernels so only the first run pays the compile cost.
+- "$PWD/workspace/.cache/triton:/root/.triton"
+- "$PWD/workspace/.cache/miopen:/root/.cache/miopen"
+- "$PWD/workspace/.cache/torchinductor:/root/.cache/torchinductor"
