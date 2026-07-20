@@ -1,0 +1,21 @@
+flow-diffusion/AVDC_experiments   (iTHOR ObjectNav harness reference: ThorEnv + scene2targets + get_cmat)
+https://github.com/flow-diffusion/AVDC_experiments
+commit e9b5b0098e59da0e1fe24a18ed9bec5b825e2ca2  (main, pinned; same pin as the AVDC model package)
+  experiment/benchmark_thor.py   ThorEnv (ai2thor Controller wrapper), scene2targets, eval() loop
+  experiment/thor_exp/utils.py   get_cmat(fov=90) camera intrinsics
+
+AI2-THOR (the simulator itself; Unity build fetched at build/runtime from the allenai public bucket)
+https://github.com/allenai/ai2thor
+  pip: ai2thor==4.0.0   (matches AVDC_experiments requirements.txt; CloudRendering-capable era)
+  Unity CloudRendering build: https://ai2-thor-public.allenai.org/builds/thor-CloudRendering-<COMMIT_ID>.zip
+    (CloudRendering uses ai2thor.build.DEFAULT_CLOUDRENDERING_COMMIT_ID, distinct from the package-wide
+     COMMIT_ID; fetched by the ai2thor Controller on first run - or the optional scripts/prefetch_build.sh -
+     into the mounted ~/.ai2thor cache, not re-hosted - rule 8)
+
+Vulkan runtime (headless CloudRendering on gfx1151, RDNA3.5) - validated: Radeon 8060S (RADV GFX1151):
+  Mesa RADV  (mesa-vulkan-drivers, ICD /usr/share/vulkan/icd.d/radeon_icd.json on Mesa 25.x; older
+             Mesa: radeon_icd.x86_64.json) + libvulkan1
+
+The AVDC video model / UniMatch flow / CLIP that drive this sim live in the AVDC consumer layer
+(packages/wam/avdc-ithor), chained on top of this base. Weights fetched at runtime (rule 8):
+  iTHOR video model  https://huggingface.co/Po-Chen/flowdiffusion/resolve/main/ckpts/ithor/model-16.pt

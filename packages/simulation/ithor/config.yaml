@@ -1,0 +1,55 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# init_image omitted: ryzers defaults to the ROCm 7.2.2 base
+# (rocm/pytorch torch 2.10.0), which already ships the ROCm torch stack. This is a model-agnostic
+# AI2-THOR (iTHOR) simulator base; chain a policy/model on top with
+#   ryzers build ithor <model>
+# and select a policy at runtime via POLICY_FACTORY (see README).
+
+build_arguments:
+- "AI2THOR_VERSION=4.0.0"
+
+gpu_support: true
+x11_display: false
+
+environment_variables:
+- "HSA_OVERRIDE_GFX_VERSION=11.5.1"
+- "HF_HUB_DISABLE_TELEMETRY=1"
+- "TOKENIZERS_PARALLELISM=false"
+# --- Headless Unity rendering (AI2-THOR CloudRendering over Vulkan) ---------------------------
+# CloudRendering renders offscreen via Vulkan (no X server). On AMD the ICD is Mesa RADV; force it
+# so the loader does not pick a broken/soft ICD. On Mesa 25.x (Ubuntu 24.04) the RADV ICD is
+# `radeon_icd.json` (older Mesa used the arch-suffixed `radeon_icd.x86_64.json`; the Dockerfile
+# symlinks both). Override VK_ICD_FILENAMES to try AMDVLK, or unset to let the loader enumerate
+# (fallback ladder, see docs/UPSTREAM_PIN + laptop docs/ithor/PLAN.md). Validated on gfx1151:
+# "Radeon 8060S Graphics (RADV GFX1151)", driver radv.
+- 'VK_ICD_FILENAMES=${VK_ICD_FILENAMES:-/usr/share/vulkan/icd.d/radeon_icd.json}'
+- 'THOR_PLATFORM=${THOR_PLATFORM:-CloudRendering}'
+- 'THOR_GPU_DEVICE=${THOR_GPU_DEVICE:-0}'
+- 'THOR_SERVER_TIMEOUT=${THOR_SERVER_TIMEOUT:-300}'
+# The ai2thor Unity build + downloaded scene assets cache under $HOME/.ai2thor (mounted, rule 8).
+- "HOME=/root"
+# --- Distinct container targets so this base's mounts never collide with a chained model layer's
+# /outputs + /models (ryzers concatenates volume mappings). Mirrors simulation/mimicgen.
+- "OUT_DIR=/sim_outputs"
+# --- iTHOR ObjectNav task / harness knobs (override from host: VAR=... ryzers run demos/demo_*.sh)
+- 'SCENE=${SCENE:-}'
+- 'TARGET=${TARGET:-}'
+- 'N_SEEDS=${N_SEEDS:-}'
+- 'SEED=${SEED:-}'
+- 'RESOLUTION=${RESOLUTION:-}'
+- 'MAX_EPLEN=${MAX_EPLEN:-}'
+- 'ROTATE_STEP_DEGREES=${ROTATE_STEP_DEGREES:-}'
+- 'VISIBILITY_DISTANCE=${VISIBILITY_DISTANCE:-}'
+- 'RENDER_RESOLUTION=${RENDER_RESOLUTION:-}'
+# Policy selection: module:function returning a sim_ithor.Policy (default: built-in ScriptedPolicy,
+# needs no model). A model layer sets this to its adapter (e.g. avdc_ithor_policy:build_policy).
+- 'POLICY_FACTORY=${POLICY_FACTORY:-}'
+
+volume_mappings:
+- "$PWD/workspace/simulation-ithor/outputs:/sim_outputs"
+- "$PWD/workspace/simulation-ithor/data:/sim_data"
+# Persist the ~540 MB ai2thor Unity CloudRendering build + downloaded scene assets across runs
+# (fetched from the allenai public bucket, rule 8; stays off the laptop, rule 3).
+- "$PWD/workspace/simulation-ithor/ai2thor_cache:/root/.ai2thor"

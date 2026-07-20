@@ -1,0 +1,65 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# AVDC iTHOR MODEL layer - build ON TOP of the simulation/ithor sim base:
+#   ryzers build ithor avdc-ithor --name avdc-ithor
+# The base supplies ai2thor + Vulkan/CloudRendering + the sim_ithor harness (and its /sim_outputs,
+# /sim_data, ~/.ai2thor mounts, concatenated with the ones below). This layer adds the AVDC model.
+
+build_arguments:
+- "AVDC_COMMIT=e9b5b0098e59da0e1fe24a18ed9bec5b825e2ca2"
+
+gpu_support: true
+x11_display: false
+
+environment_variables:
+- "HSA_OVERRIDE_GFX_VERSION=11.5.1"
+- "HF_HOME=/root/.cache/huggingface"
+- 'HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET:-1}'
+- 'HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER:-0}'
+- "HF_HUB_DISABLE_TELEMETRY=1"
+- "TOKENIZERS_PARALLELISM=false"
+- "TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1"
+- "TORCH_BLAS_PREFER_HIPBLASLT=0"
+# MIOpen NORMAL: search+cache good conv kernels for the 3D UNet + UniMatch flow on gfx1151 (cached
+# in the mounted MIOpen dir; only the first run pays it).
+- 'MIOPEN_FIND_MODE=${MIOPEN_FIND_MODE:-NORMAL}'
+- "MIOPEN_USER_DB_PATH=/root/.cache/miopen"
+- "MIOPEN_CUSTOM_CACHE_DIR=/root/.cache/miopen"
+# Phase-6 inference optimizations (same 3D-UNet as the Meta-World AVDC image): fp16 autocast for
+# sampling + torch.compile the UNet. Quality-gated (closed-loop ObjectNav success preserved).
+- 'AVDC_AMP=${AVDC_AMP:-fp16}'
+- 'AVDC_COMPILE=${AVDC_COMPILE:-1}'
+- 'AVDC_COMPILE_MODE=${AVDC_COMPILE_MODE:-default}'
+- "TORCHINDUCTOR_CACHE_DIR=/root/.cache/torchinductor"
+- "OUT_DIR=/outputs"
+- "MODELS_DIR=/models"
+# AVDC iTHOR checkpoint (scripts/download_checkpoints.sh -> $MODELS_DIR/ithor/model-16.pt).
+- 'CKPT_DIR=${CKPT_DIR:-/models/ithor}'
+- 'MILESTONE=${MILESTONE:-16}'
+- 'SAMPLE_STEPS=${SAMPLE_STEPS:-}'
+- 'RGD_TFM_TRIES=${RGD_TFM_TRIES:-}'
+# iTHOR ObjectNav harness knobs (the sim base reads these too).
+- 'THOR_PLATFORM=${THOR_PLATFORM:-CloudRendering}'
+- 'THOR_GPU_DEVICE=${THOR_GPU_DEVICE:-0}'
+# Mesa 25.x (Ubuntu 24.04 base) names the RADV ICD radeon_icd.json (the sim base symlinks the legacy
+# arch-suffixed name too). Validated on gfx1151: Radeon 8060S Graphics (RADV GFX1151).
+- 'VK_ICD_FILENAMES=${VK_ICD_FILENAMES:-/usr/share/vulkan/icd.d/radeon_icd.json}'
+- 'SCENE=${SCENE:-}'
+- 'TARGET=${TARGET:-}'
+- 'SEED=${SEED:-}'
+- 'TASKS=${TASKS:-}'
+- 'N_SEEDS=${N_SEEDS:-}'
+- 'RESOLUTION=${RESOLUTION:-}'
+- 'MAX_EPLEN=${MAX_EPLEN:-}'
+- 'RENDER_RESOLUTION=${RENDER_RESOLUTION:-}'
+# Policy seam: default to the AVDC adapter so the sim base benchmark driver drives AVDC.
+- 'POLICY_FACTORY=${POLICY_FACTORY:-avdc_ithor_policy:build_policy}'
+
+volume_mappings:
+- "$PWD/workspace/avdc-ithor/outputs:/outputs"
+- "$PWD/workspace/avdc-ithor/models:/models"
+- "$PWD/workspace/.cache/huggingface:/root/.cache/huggingface"
+- "$PWD/workspace/.cache/triton:/root/.triton"
+- "$PWD/workspace/.cache/miopen:/root/.cache/miopen"
+- "$PWD/workspace/.cache/torchinductor:/root/.cache/torchinductor"
