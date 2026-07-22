@@ -26,7 +26,9 @@ environment_variables:
 # FLUX.2 klein-base-4B stack (downloaded by scripts/download_checkpoints.sh at runtime).
 - "FLUX2_VARIANT=${FLUX2_VARIANT:-4b}"
 - "FLUX2_MODEL_PATH=${FLUX2_MODEL_PATH:-/models/flux2/FLUX.2-klein-base-4B/flux-2-klein-base-4b.safetensors}"
-- "FLUX2_AE_MODEL_PATH=${FLUX2_AE_MODEL_PATH:-/models/flux2/FLUX.2-dev/ae.safetensors}"
+# AE derived from the (public) klein-base VAE via scripts/convert_klein_vae.py
+# (strict-load OK, 31.4 dB recon) so no gated FLUX.2-dev access is needed.
+- "FLUX2_AE_MODEL_PATH=${FLUX2_AE_MODEL_PATH:-/models/flux2/FLUX.2-klein-base-4B/ae.safetensors}"
 - "FLUX2_QWEN3_MODEL_SPEC=${FLUX2_QWEN3_MODEL_SPEC:-Qwen/Qwen3-4B}"
 - "CKPT_PATH=${CKPT_PATH:-/models/imagewam_release/libero/flux2_klein_4b/model.pt}"
 - "DATASET_STATS_PATH=${DATASET_STATS_PATH:-/models/imagewam_release/libero/flux2_klein_4b/dataset_stats.json}"

@@ -110,7 +110,10 @@ def main() -> int:
     height, width = int(video_size[0]), int(video_size[1])
     proprio_dim = int(cfg.data.train.processor.proprio_output_dim)
     action_dim = int(cfg.data.train.processor.action_output_dim)
-    action_horizon = int(cfg.EVALUATION.get("action_horizon", 16))
+    # Mirror eval_libero_single.py: null EVALUATION.action_horizon => num_frames - 1.
+    action_horizon_cfg = cfg.EVALUATION.get("action_horizon", None)
+    action_horizon = (int(action_horizon_cfg) if action_horizon_cfg is not None
+                      else int(cfg.data.train.num_frames) - 1)
     print(f"config           : {CONFIG_NAME}  HxW={height}x{width}  "
           f"action_horizon={action_horizon}  proprio_dim={proprio_dim}  action_dim={action_dim}")
 
@@ -160,10 +163,41 @@ def main() -> int:
         return 1
 
     if VISUALIZE_DREAM:
+        # ImageWAM's "dream" for the FLUX.2 klein image stack is a single edited future frame
+        # via infer_video_flux2 (2D flux AE decode) -- NOT the wan/omnigen video infer_joint
+        # path (which needs a temporal VAE). Dispatch on model.stack for correctness.
+        stack = str(getattr(model, "stack", ""))
         with torch.no_grad():
-            joint = model.infer_joint(**_kwargs())
-        dream = joint.get("video")
-        print(f"dreamed frame    : {tuple(dream.shape) if hasattr(dream, 'shape') else type(dream)}")
+            if stack == "flux2":
+                dream_out = model.infer_video_flux2(
+                    prompt=PROMPT, input_image=image, proprio=proprio,
+                    num_inference_steps=NUM_STEPS, seed=0)
+                dream = dream_out.get("image")
+            else:
+                num_frames = int(cfg.data.train.num_frames)
+                freq = int(cfg.data.train.action_video_freq_ratio)
+                nvf = (num_frames - 1) // freq + 1
+                dream_out = model.infer_joint(num_video_frames=nvf, **_kwargs())
+                dream = dream_out.get("video")
+        shp = tuple(dream.shape) if hasattr(dream, "shape") else type(dream)
+        finite = bool(torch.isfinite(dream).all()) if hasattr(dream, "shape") else "n/a"
+        print(f"dreamed image    : {shp}  finite={finite}  (stack={stack})")
+
+        # Save the dreamed frame so P5/P6 two-column visualizations can reuse it.
+        out_dir = os.environ.get("OUT_DIR", "/outputs")
+        try:
+            import numpy as _np
+            from PIL import Image as _Image
+            arr = dream.detach().to(torch.float32).cpu().numpy()
+            if arr.ndim == 3 and arr.shape[0] in (1, 3):  # CHW -> HWC
+                arr = _np.transpose(arr, (1, 2, 0))
+            arr = ((arr.clip(-1, 1) + 1.0) * 127.5).astype("uint8") if arr.min() < 0 \
+                else (arr.clip(0, 1) * 255).astype("uint8")
+            os.makedirs(out_dir, exist_ok=True)
+            _Image.fromarray(arr).save(os.path.join(out_dir, "dream_smoke.png"))
+            print(f"dreamed image    : saved -> {out_dir}/dream_smoke.png")
+        except Exception as e:  # visualization is best-effort in the smoke
+            print(f"dreamed image    : save skipped ({type(e).__name__}: {e})")
 
     print("PASS: ImageWAM (FLUX.2) full-model ROCm smoke OK")
     return 0
