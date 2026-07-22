@@ -1,0 +1,4 @@
+FlowWAM upstream pin (github.com/YixiangChen515/FlowWAM_WorldArena): f06fa46042e97738c6619c868f1097be6749d48d
+Paper: FlowWAM: Optical Flow as a Unified Action Representation for World Action Models
+       (arXiv 2607.13017)
+Backbone: Wan2.2-TI2V-5B (DiffSynth) — shares FastWAM's Wan-video ROCm playbook.
