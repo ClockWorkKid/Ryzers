@@ -1,0 +1,63 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# init_image omitted: ryzers defaults to the ROCm 7.2.2 base
+# (rocm/pytorch torch 2.10.0), which already ships the ROCm torch stack.
+
+build_arguments:
+- "IMAGEWAM_COMMIT=70bc47147a49652fc3ca62617cab0e0b6b31bc92"
+- "FLUX2_COMMIT=50fe5162777813d869182b139e83b10743caef15"
+
+gpu_support: true
+x11_display: false
+
+environment_variables:
+- "HSA_OVERRIDE_GFX_VERSION=11.5.1"
+- "HF_HOME=/root/.cache/huggingface"
+- 'HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET:-1}'
+- 'HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER:-0}'
+- 'HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT:-60}'
+- "HF_HUB_DISABLE_TELEMETRY=1"
+- "TOKENIZERS_PARALLELISM=false"
+# ImageWAM upstream + FLUX.2 source (used via PYTHONPATH, per upstream).
+- "IMAGEWAM_REPO=/repos/imagewam"
+- "FLUX2_SRC=/repos/flux2"
+- "PYTHONPATH=/repos/imagewam/src:/repos/flux2/src:/repos/flux2"
+# FLUX.2 klein-base-4B stack (downloaded by scripts/download_checkpoints.sh at runtime).
+- "FLUX2_VARIANT=${FLUX2_VARIANT:-4b}"
+- "FLUX2_MODEL_PATH=${FLUX2_MODEL_PATH:-/models/flux2/FLUX.2-klein-base-4B/flux-2-klein-base-4b.safetensors}"
+- "FLUX2_AE_MODEL_PATH=${FLUX2_AE_MODEL_PATH:-/models/flux2/FLUX.2-dev/ae.safetensors}"
+- "FLUX2_QWEN3_MODEL_SPEC=${FLUX2_QWEN3_MODEL_SPEC:-Qwen/Qwen3-4B}"
+- "CKPT_PATH=${CKPT_PATH:-/models/imagewam_release/libero/flux2_klein_4b/model.pt}"
+- "DATASET_STATS_PATH=${DATASET_STATS_PATH:-/models/imagewam_release/libero/flux2_klein_4b/dataset_stats.json}"
+# ROCm/gfx1151 runtime knobs (mirror fastwam).
+- "MUJOCO_GL=egl"
+- "PYOPENGL_PLATFORM=egl"
+- "TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1"
+- "TORCH_BLAS_PREFER_HIPBLASLT=0"
+- "OUT_DIR=/outputs"
+# Per-demo knobs (override from the host: VAR=... ryzers run /ryzers/demos/demo_*.sh).
+- 'HF_TOKEN=${HF_TOKEN:-}'
+- 'NUM_STEPS=${NUM_STEPS:-}'
+- 'SEED=${SEED:-}'
+- 'TAG=${TAG:-}'
+- 'PROMPT=${PROMPT:-}'
+- 'DATASET=${DATASET:-}'
+- 'NUM_EPISODES=${NUM_EPISODES:-}'
+- 'NUM_TRIALS=${NUM_TRIALS:-}'
+- 'NUM_TASKS=${NUM_TASKS:-}'
+- 'SUITE=${SUITE:-}'
+- 'ACTION_HORIZON=${ACTION_HORIZON:-}'
+- 'REPLAN_STEPS=${REPLAN_STEPS:-}'
+- 'VISUALIZE_DREAM=${VISUALIZE_DREAM:-}'
+# Interactive/closed-loop knobs (require a simulation/* base).
+- 'PORT=${PORT:-}'
+- 'NUM_GPUS=${NUM_GPUS:-}'
+- 'POLICY_FACTORY=${POLICY_FACTORY:-}'
+- 'TASK=${TASK:-}'
+- 'TASKS=${TASKS:-}'
+
+volume_mappings:
+- "$PWD/workspace/imagewam/outputs:/outputs"
+- "$PWD/workspace/imagewam/models:/models"
+- "$PWD/workspace/.cache/huggingface:/root/.cache/huggingface"
