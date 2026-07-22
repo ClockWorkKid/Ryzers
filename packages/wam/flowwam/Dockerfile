@@ -30,7 +30,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 WORKDIR /ryzers
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends git cmake build-essential ffmpeg && \
+    apt-get install -y --no-install-recommends git cmake build-essential ffmpeg unzip && \
     rm -rf /var/lib/apt/lists/*
 
 RUN git clone https://github.com/YixiangChen515/FlowWAM_WorldArena /repos/flowwam && \

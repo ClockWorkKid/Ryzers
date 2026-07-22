@@ -21,14 +21,18 @@ MDIR="${FLOWWAM_MODEL_DIR:-/models/flowwam}"
 mkdir -p "$MDIR"
 
 dl_base() {
-  echo "===== Wan2.2-TI2V-5B base (enc + DiT + VAE) ====="
+  # DiffSynth's WanVideoPipeline.from_pretrained redirects the shared UMT5-XXL text encoder
+  # (models_t5_umt5-xxl-enc-bf16.pth) to the Wan2.1-T2V-1.3B repo (redirect_common_files=True),
+  # so it must live under Wan2.1-T2V-1.3B (it is NOT in the Wan2.2-TI2V-5B repo). The Wan2.2 DiT
+  # (diffusion_pytorch_model*) + VAE (Wan2.2_VAE.pth) stay under Wan2.2-TI2V-5B.
+  echo "===== Wan2.2-TI2V-5B (DiT + VAE + configs) ====="
   hf_prefetch Wan-AI/Wan2.2-TI2V-5B \
-    --include "models_t5_umt5-xxl-enc-bf16.pth" "diffusion_pytorch_model*.safetensors" \
-              "Wan2.2_VAE.pth" "config.json" "*.json" \
+    --include "diffusion_pytorch_model*.safetensors" "*.index.json" \
+              "Wan2.2_VAE.pth" "config.json" "configuration.json" \
     --local-dir "$MDIR/Wan-AI/Wan2.2-TI2V-5B"
-  echo "===== Wan2.1-T2V-1.3B tokenizer (google/*) ====="
+  echo "===== Wan2.1-T2V-1.3B (UMT5-XXL text encoder + google tokenizer) ====="
   hf_prefetch Wan-AI/Wan2.1-T2V-1.3B \
-    --include "google/*" \
+    --include "google/*" "models_t5_umt5-xxl-enc-bf16.pth" \
     --local-dir "$MDIR/Wan-AI/Wan2.1-T2V-1.3B"
 }
 
@@ -43,7 +47,12 @@ dl_embodiments() {
   hf_prefetch TianxingChen/RoboTwin2.0 embodiments.zip \
     --repo-type dataset --local-dir "$MDIR/embodiments_dl"
   if [ -f "$MDIR/embodiments_dl/embodiments.zip" ]; then
-    ( cd "$MDIR/embodiments_dl" && unzip -q -o embodiments.zip -d "$MDIR/embodiments" )
+    # Use python's zipfile so we don't depend on the `unzip` apt package being present.
+    if command -v unzip >/dev/null 2>&1; then
+      unzip -q -o "$MDIR/embodiments_dl/embodiments.zip" -d "$MDIR/embodiments"
+    else
+      python3 -m zipfile -e "$MDIR/embodiments_dl/embodiments.zip" "$MDIR/embodiments/"
+    fi
     echo "    extracted -> $MDIR/embodiments"
   fi
 }
