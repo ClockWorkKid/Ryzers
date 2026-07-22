@@ -58,6 +58,12 @@ RUN PIP_CONSTRAINT=/opt/imagewam-constraints.txt pip install --no-cache-dir -e "
       "hf-transfer>=0.1.8" "sentencepiece>=0.2" "pyarrow>=17" "av>=12" \
       "imageio>=2.34" "imageio-ffmpeg>=0.5" "matplotlib>=3.8" "opencv-python-headless"
 
+# torchcodec ships CUDA-linked decoder cores (need libnvrtc.so) that are unusable on ROCm,
+# and the vendored LeRobot auto-selects it whenever it is importable -> video decode crashes.
+# Remove it so LeRobot falls back to its PyAV (av) CPU backend, which decodes the av1
+# LIBERO/RoboTwin clips fine on gfx1151 (ROCm hardware patch, rule 2.1).
+RUN pip uninstall -y torchcodec >/dev/null 2>&1 || true
+
 # Sim Policy adapters (sim_libero.Policy / sim_robotwin.Policy wrapping the ImageWAM model).
 # Only imported when driving a sim base via POLICY_FACTORY=imagewam_{libero,robotwin}_policy:
 # build_policy; harmless (unused) on the plain base.
