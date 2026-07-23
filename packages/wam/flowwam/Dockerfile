@@ -25,7 +25,10 @@ ARG FLOWWAM_COMMIT=f06fa46042e97738c6619c868f1097be6749d48d
 ENV DEBIAN_FRONTEND=noninteractive \
     HF_HUB_DISABLE_TELEMETRY=1 \
     TOKENIZERS_PARALLELISM=false \
-    FLOWWAM_REPO=/repos/flowwam
+    FLOWWAM_REPO=/repos/flowwam \
+    FLOWWAM_FULL_REPO=/repos/flowwam-full
+
+ARG FLOWWAM_FULL_COMMIT=68abaa2
 
 WORKDIR /ryzers
 
@@ -47,6 +50,17 @@ RUN python /ryzers/scripts/strip_cuda_torch.py /repos/flowwam/requirements.txt &
     PIP_CONSTRAINT=/opt/flowwam-constraints.txt pip install --no-cache-dir -e /repos/flowwam && \
     PIP_CONSTRAINT=/opt/flowwam-constraints.txt pip install --no-cache-dir \
       "hf-transfer>=0.1.8" "huggingface-hub>=0.34" "imageio-ffmpeg>=0.5"
+
+# ---- CLOSED-LOOP layer: real FlowWAM flow-ACTION repo (world-action model) ----
+# The repo above (FlowWAM_WorldArena) is world-MODELING only (open-loop video eval). The genuine
+# closed loop (IDM action expert -> RoboTwin env.step over a ws server + robotwin_policy) lives in
+# the full FlowWAM repo. We clone it here at a pin and add ONLY its thin transport deps; its
+# diffsynth is used by the server via runtime PYTHONPATH (see demos/demo_closedloop_robotwin.sh),
+# NOT pip-installed, so the validated open-loop diffsynth above is left untouched (rules 0.4/2.1).
+RUN git clone https://github.com/YixiangChen515/FlowWAM.git /repos/flowwam-full && \
+    git -C /repos/flowwam-full checkout ${FLOWWAM_FULL_COMMIT} 2>/dev/null || true
+RUN PIP_CONSTRAINT=/opt/flowwam-constraints.txt pip install --no-cache-dir \
+      "websockets>=12.0" "msgpack>=1.0" "msgpack-numpy>=0.4.8"
 
 # Sim Policy adapter (robotwin) wrapping the FlowWAM dual-stream world model. Only imported when
 # driving the robotwin sim base via POLICY_FACTORY=flowwam_robotwin_policy; harmless otherwise.

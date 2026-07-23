@@ -10,7 +10,8 @@
 #
 # Components (SeedVR2 refiner deliberately EXCLUDED -- deferred, apex is CUDA-only):
 #   base        Wan2.2-TI2V-5B (UMT5-XXL enc + DiT + VAE) + Wan2.1-T2V-1.3B tokenizer  (~12 GB)
-#   stage1      FlowWAM stage-1 world-model checkpoint (YixiangChen/FlowWAM)
+#   stage1      FlowWAM world-MODEL checkpoint (WorldArena open-loop video eval)
+#   robotwin    FlowWAM world-ACTION checkpoint + action-norm stats (RoboTwin closed-loop policy)
 #   embodiments RoboTwin2.0 embodiment URDFs (SAPIEN robot-only renderer, ~220 MB)
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -37,9 +38,18 @@ dl_base() {
 }
 
 dl_stage1() {
-  echo "===== FlowWAM stage-1 checkpoint ====="
+  echo "===== FlowWAM world-MODEL checkpoint (WorldArena open-loop video eval) ====="
   hf_prefetch YixiangChen/FlowWAM flowwam_worldarena_stage1.safetensors \
     --local-dir "$MDIR/stage_1"
+}
+
+dl_robotwin() {
+  # Closed-loop ACTION policy: the dual-stream DiT + IDM action expert weights and the action
+  # normalization stats the flow_action_server expects (README "Download the FlowWAM checkpoint").
+  echo "===== FlowWAM world-ACTION checkpoint (RoboTwin closed-loop policy) ====="
+  hf_prefetch YixiangChen/FlowWAM \
+    flowwam_robotwin.safetensors flowwam_robotwin_action_norm_stats.npz \
+    --local-dir "$MDIR/robotwin"
 }
 
 dl_embodiments() {
@@ -60,9 +70,10 @@ dl_embodiments() {
 case "$WHICH" in
   base)        dl_base ;;
   stage1)      dl_stage1 ;;
+  robotwin)    dl_robotwin ;;
   embodiments) dl_embodiments ;;
-  all)         dl_base; dl_stage1; dl_embodiments ;;
-  *) echo "usage: download_checkpoints.sh [base|stage1|embodiments|all]" >&2; exit 2 ;;
+  all)         dl_base; dl_stage1; dl_robotwin; dl_embodiments ;;
+  *) echo "usage: download_checkpoints.sh [base|stage1|robotwin|embodiments|all]" >&2; exit 2 ;;
 esac
 
 echo "PASS: FlowWAM weights ($WHICH) cached under $MDIR"
