@@ -44,7 +44,7 @@ export PYTHONPATH="${REPO}/src:${FLUX2_SRC}/src:${FLUX2_SRC}:${REPO}/experiments
 cd /tmp
 for t in $(seq 0 $((NUM_TASKS-1))); do
   echo "########## $SUITE task $t (trials=$NUM_TRIALS) ##########"
-  python "$REPO/experiments/libero/eval_libero_single.py" \
+  python /ryzers/scripts/opt_launch.py "$REPO/experiments/libero/eval_libero_single.py" \
     --config-name sim_libero_omnigen2 \
     task="libero_flux2_klein_${VARIANT}_base_imagewam" \
     ckpt="$CKPT" gpu_id=0 mixed_precision=bf16 \

@@ -87,6 +87,12 @@ def main() -> int:
     }
     policy = D.get_model(usr_args)
     model = policy.model
+    # Bake in the default-route optimizations (text-embedding cache + torch.compile[action]).
+    try:
+        import imagewam_opt
+        imagewam_opt.patch_class()
+    except Exception:  # noqa: BLE001 - optimizer must never break the demo
+        pass
     print(f"policy ready     : replan={policy.replan_steps} horizon={policy.action_horizon} steps={NUM_STEPS}")
 
     scene = RoboTwinScene.build_stable(TASK, task_config=TASK_CONFIG, seed=SEED)

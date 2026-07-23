@@ -78,8 +78,24 @@ visualization only and never runs during control.
   3.88B video expert generation loop (84% of params), only its conditioning prefill.
 - **Text-embedding caching across replans: measured −18% (−193 ms → 878 ms).** The instruction
   is fixed per episode; `infer_action_flux2` already accepts `context`/`context_mask`, so encode
-  Qwen3 once and reuse — a drop-in win. Next lever is partial prefill text-KV caching (the fixed
-  text portion of the 357 ms prefill).
+  Qwen3 once and reuse — a drop-in, exactly-lossless win.
+- **`torch.compile[default]` of the per-step MoT action forward: ~1.25× on the diffusion loop**
+  (max|Δ| ~1e-3 vs eager, bf16). The loop is compute/bandwidth-bound, not launch-bound —
+  HIP-graph capture gave 0.99× and `reduce-overhead` regressed, so inductor default is used.
+  Explored but not adopted: ParaDiGMS parallel-in-time sampling (near-lossless but only ~1.09×
+  here — the large video KV prefix makes per-step attention scale with batch). ROCm knob sweep
+  confirmed `TORCH_BLAS_PREFER_HIPBLASLT=0` + bf16 is optimal (hipBLASLt=1 regresses ~32%,
+  fp16 NaNs). Remaining levers: shrink the `Sv≈905` video prefix, weight-only fp8/int8 experts.
+
+**Baked into the default route.** Both proven wins ship ON by default for every demo via
+`scripts/imagewam_opt.py` (patches the `ImageWAM`/`MoT` classes) — wired through
+`scripts/opt_launch.py` for the upstream closed-loop evaluators and interactive servers, and
+inline in the open-loop/dream scripts. No upstream files are modified. They fall back to eager on
+any error and are env-gated: `IMAGEWAM_OPT=0` (all off), `IMAGEWAM_TEXT_CACHE=0`,
+`IMAGEWAM_ACTION_COMPILE=0`. Note: `torch.compile` pays a one-time warm-up (~1–2 min) on the first
+action step of a process; set `IMAGEWAM_ACTION_COMPILE=0` if that stall is undesirable (e.g. a
+short real-time demo). `demos/demo_latency.sh` is intentionally left unwrapped so its A/B
+(naive vs text-cached) stays a clean measurement.
 
 ### Status
 

@@ -36,4 +36,4 @@ export PYTHONPATH="/opt/imagewam-adapters:${REPO}:${REPO}/src:${FLUX2_SRC}/src:$
 for f in "$CKPT" "$DATASET_STATS" "$FLUX2_MODEL_PATH" "$FLUX2_AE_MODEL_PATH"; do
   [ -f "$f" ] || { echo "missing weight: $f" >&2; exit 1; }
 done
-exec python -m sim_libero.interactive_server_rt
+exec python /ryzers/scripts/opt_launch.py -m sim_libero.interactive_server_rt

@@ -132,6 +132,12 @@ def main() -> int:
     model = instantiate(cfg.model, model_dtype=torch.bfloat16, device="cuda")
     model.load_checkpoint(str(CKPT))
     model = model.to("cuda").eval()
+    # Bake in the default-route optimizations (text-embedding cache + torch.compile[action]).
+    try:
+        import imagewam_opt
+        imagewam_opt.patch_class()
+    except Exception:  # noqa: BLE001 - optimizer must never break the demo
+        pass
     print(f"model loaded     : {time.time()-t0:.1f}s  params={sum(p.numel() for p in model.parameters())/1e9:.2f}B")
 
     idxs = np.linspace(0, len(ds) - 1, NUM_SAMPLES).astype(int).tolist()

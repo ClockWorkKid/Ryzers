@@ -110,6 +110,12 @@ def main() -> int:
     model = instantiate(cfg.model, model_dtype=torch.bfloat16, device=device)
     E._load_model_checkpoint(model, str(CKPT))
     model = model.to(device).eval()
+    # Bake in the default-route optimizations (text-embedding cache + torch.compile[action]).
+    try:
+        import imagewam_opt
+        imagewam_opt.patch_class()
+    except Exception:  # noqa: BLE001 - optimizer must never break the demo
+        pass
     processor = instantiate(cfg.data.train.processor).eval()
     processor.set_normalizer_from_stats(load_dataset_stats_from_json(str(STATS)))
 

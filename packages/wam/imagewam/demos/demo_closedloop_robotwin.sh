@@ -41,7 +41,7 @@ bash /ryzers/scripts/setup_robotwin.sh
 cd "$REPO"
 for TASK in $TASKS; do
   echo "########## RoboTwin $TASK ($TASK_CONFIG, $NUM_EPISODES episodes) ##########"
-  python -u experiments/robotwin/eval_robotwin_single.py \
+  python -u /ryzers/scripts/opt_launch.py experiments/robotwin/eval_robotwin_single.py \
     --config-name sim_robotwin \
     task="$TASK_CFG_NAME" \
     ckpt="$CKPT" gpu_id=0 mixed_precision=bf16 \
