@@ -43,17 +43,50 @@ This fetches the public ImageWAM checkpoint (`yuyangalin/ImageWAM-FLUX.2-4B-LIBE
 
 ### Demos
 
+All demos are `ryzers run` wrappers over `scripts/` using in-container paths (`/models`,
+`/repos`, `/outputs`) and env overrides; they check for their prerequisites (weights / sim
+base / mounted dataset) and print a hint if missing. Outputs land in `workspace/*/outputs`.
+
 | Demo | Base | What it does |
 |---|---|---|
 | `demos/demo_smoke.sh` | plain | Load checkpoint, one `infer_action`; cold/steady latency + VRAM (`VISUALIZE_DREAM=1` also renders the dreamed frame). |
+| `demos/demo_openloop_libero.sh` | plain + LIBERO dataset | **P5** open-loop on real episodes (dataset replay, no sim): action MAE vs GT, AE PSNR, dreamed stills (`ol_metrics.json`, `ol_action_overlay.png`, `ol_dream_*.png`). |
+| `demos/demo_dreamvideo_openloop.sh` | plain + dataset | Continuous open-loop dream **video**: every frame is `[obs \| GT future \| dream]` (`DATASET=libero\|robotwin`; augmentation disabled for stable GT/obs columns). |
+| `demos/demo_latency.sh` | plain | **P8** per-module latency/computation profile (action vs dream path, fixed-vs-per-step split, param distribution, measured text-cache win) -> `p8_latency.json` + `.png`. Synthetic shapes, no dataset/sim. |
+| `demos/demo_closedloop_libero.sh` | `libero` | **P6** closed-loop LIBERO rollouts (MuJoCo, upstream evaluator) + `success_summary.json`. |
+| `demos/demo_closedloop_robotwin.sh` | `robotwin` | **P6b** closed-loop RoboTwin 2.0 rollouts (SAPIEN, upstream `eval_policy`). |
+| `demos/demo_dreamvideo_closedloop_libero.sh` | `libero` | Continuous **dream-vs-sim** video: actual sim frame every step (left) + re-dreamed future at each replan (right). |
+| `demos/demo_dreamvideo_closedloop_robotwin.sh` | `robotwin` | RoboTwin analogue of the dream-vs-sim video (3-cam compact layout). |
+| `demos/demo_interactive_libero{,_rt}.sh` | `libero` | **P7** interactive LIBERO server — synchronous and real-time. |
+| `demos/demo_interactive_robotwin{,_rt}.sh` | `robotwin` | **P7** interactive RoboTwin server — synchronous and real-time. |
 
-*(open-loop / dream / latency / closed-loop / interactive demos land as milestones P5–P8 — see `../../../../docs` / laptop `PLAN.md`.)*
+### Latency & optimization (P8)
+
+Profiled on **Radeon 8060S (Strix Halo `gfx1151`)**, bf16, `num_inference_steps=20`,
+`action_horizon=16`, input 224×448 (`scripts/profile_modules.py`; full writeup + chart on the
+laptop under `artifacts/latency/`). The deployment cost is the **action path**
+(`infer_action_flux2`); the **dream path** (`infer_video_flux2`) is image-world-model /
+visualization only and never runs during control.
+
+| Path | Total / call | Dominant cost |
+|---|---:|---|
+| Action (control) | **1071 ms** | prefill KV 357 ms (33%) + action MoT loop 453 ms (42%, 22.7 ms/step) + Qwen3 195 ms (18%) |
+| Dream (viz only) | **10757 ms** | video DiT loop 10344 ms (**96%**, 517 ms/step) — **~10× the action path, ~23× per step** |
+
+- **Fixed cost ≈ 605 ms (57%)** of the action path; the diffusion-step knob has limited
+  leverage (20→5 steps saves only ~33%) — the key ImageWAM finding: control never pays for the
+  3.88B video expert generation loop (84% of params), only its conditioning prefill.
+- **Text-embedding caching across replans: measured −18% (−193 ms → 878 ms).** The instruction
+  is fixed per episode; `infer_action_flux2` already accepts `context`/`context_mask`, so encode
+  Qwen3 once and reuse — a drop-in win. Next lever is partial prefill text-KV caching (the fixed
+  text portion of the 357 ms prefill).
 
 ### Status
 
-Port in progress on branch `wam-imagewam` (off `benchmark`). Milestones: P0 scoping ✓ ·
-P1 scaffold ✓ · P2 import smoke · P3 weight-download smoke · P4 module validation ·
-P5 open-loop + dream · P6 closed-loop · P7 interactive · P8 latency/opt analysis.
+Port complete on branch `wam-imagewam` (off `benchmark`). Milestones: P0 scoping ✓ ·
+P1 scaffold ✓ · P2 import smoke ✓ · P3 full-model ROCm smoke ✓ · P4 module validation ✓ ·
+P5 open-loop + dream ✓ · P6 closed-loop (LIBERO + RoboTwin 2.0) ✓ · P7 interactive
+(sync + real-time) ✓ · P8 latency/opt analysis ✓.
 
 ### References
 
