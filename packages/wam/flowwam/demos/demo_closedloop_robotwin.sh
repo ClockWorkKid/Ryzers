@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# FlowWAM *GENUINE* closed-loop RoboTwin 2.0 evaluation on Strix Halo (gfx1151), de-vendored
+# simulation/robotwin base. This is the upstream FlowWAM flow-ACTION pipeline (world-action model):
+#
+#   RoboTwin env --obs(head/left/right RGB + qpos + instruction)--> flow_action_server
+#     server: dual-stream DiT generates flow-conditioned video latents -> IDM action expert -> 14-D
+#             action chunk  --ws://:8000-->  robotwin_policy client  --> TASK_ENV.take_action / step
+#   ...replans every EXECUTE_WINDOW actions until success/timeout. RoboTwin scores success + writes
+#   per-episode videos. NO RoboTwin source edits (policy is symlinked into policy/flowwam).
+#
+# We reuse the upstream server + robotwin_policy VERBATIM (rule 2.1); the only project specifics are
+# ROCm env, runtime weight/repo fetch (rule 8), and co-locating server+client in ONE venv (upstream
+# splits them across two conda envs to keep torch out of the sim env; we already have both here).
+#
+# Requires the build chain:  ryzers build robotwin flowwam --name flowwam-robotwin
+#   ryzers run /ryzers/demos/demo_closedloop_robotwin.sh
+#   TASK=place_dual_shoes NUM_EPISODES=1 ryzers run /ryzers/demos/demo_closedloop_robotwin.sh
+set -uo pipefail
+
+if [ ! -d /opt/RoboTwin ]; then
+  echo "ERROR: simulation/robotwin base not found (no /opt/RoboTwin)." >&2
+  echo "       Build the chain:  ryzers build robotwin flowwam --name flowwam-robotwin" >&2
+  exit 1
+fi
+
+# ---- config ----
+FULL_REPO="${FLOWWAM_FULL_REPO:-/repos/flowwam-full}"     # real FlowWAM (action policy) repo
+FLOWWAM_FULL_COMMIT="${FLOWWAM_FULL_COMMIT:-68abaa2}"
+MDIR="${FLOWWAM_MODEL_DIR:-/models/flowwam}"
+TASK="${TASK:-beat_block_hammer}"
+TASK_CONFIG="${TASK_CONFIG:-demo_clean}"
+SEED="${SEED:-0}"
+GPU_ID="${GPU_ID:-0}"
+PORT="${PORT:-8000}"
+EXECUTE_WINDOW="${EXECUTE_WINDOW:-25}"       # actions executed per replan (chunk = 1 anchor + this)
+VIDEO_INFERENCE_STEPS="${VIDEO_INFERENCE_STEPS:-25}"
+ACTION_INFERENCE_STEPS="${ACTION_INFERENCE_STEPS:-50}"
+OUT_DIR="${OUT_DIR:-/outputs/closedloop_robotwin/$TASK}"
+CKPT="$MDIR/robotwin/flowwam_robotwin.safetensors"
+NORM="$MDIR/robotwin/flowwam_robotwin_action_norm_stats.npz"
+
+# ROCm / SAPIEN-Vulkan env (matches the rest of the flowwam package).
+export HSA_OVERRIDE_GFX_VERSION="${HSA_OVERRIDE_GFX_VERSION:-11.5.1}"
+export TORCH_BLAS_PREFER_HIPBLASLT="${TORCH_BLAS_PREFER_HIPBLASLT:-0}"
+export PYTORCH_HIP_ALLOC_CONF="${PYTORCH_HIP_ALLOC_CONF:-expandable_segments:True}"
+export CUDA_VISIBLE_DEVICES="${GPU_ID}"
+
+# ---- 1. fetch the real FlowWAM repo (code clone; idempotent) ----
+if [ ! -d "$FULL_REPO/inference" ]; then
+  echo "[setup] cloning upstream FlowWAM (action policy) -> $FULL_REPO"
+  git clone https://github.com/YixiangChen515/FlowWAM.git "$FULL_REPO"
+  git -C "$FULL_REPO" checkout "$FLOWWAM_FULL_COMMIT" 2>/dev/null || true
+fi
+# The server reads base Wan weights from LOCAL_MODEL_PATH/Wan-AI -> point it at our model cache.
+export LOCAL_MODEL_PATH="$MDIR"
+
+# ---- 2. fetch weights (idempotent; rule 8, never re-hosted) ----
+bash /ryzers/scripts/download_checkpoints.sh base
+bash /ryzers/scripts/download_checkpoints.sh robotwin
+[ -f "$CKPT" ] || { echo "ERROR: missing $CKPT" >&2; exit 1; }
+
+# ---- 3. start the flow-action inference server (background) ----
+mkdir -p "$OUT_DIR"
+SRV_LOG="$OUT_DIR/server.log"
+echo "[server] launching flow_action_server on ws://0.0.0.0:$PORT (log: $SRV_LOG)"
+# Give the server the REAL FlowWAM repo's diffsynth (action expert / dual-stream) WITHOUT replacing
+# the installed WorldArena diffsynth that the open-loop world-model eval (P5) imports. Runtime path
+# precedence avoids a second venv; if a build-time import conflict surfaces, split into its own venv.
+CHECKPOINT="$CKPT" ACTION_NORM_PATH="$NORM" LOCAL_MODEL_PATH="$MDIR" \
+  PYTHONPATH="$FULL_REPO:${PYTHONPATH:-}" \
+  HOST=0.0.0.0 PORT="$PORT" DEVICE=cuda \
+  VIDEO_INFERENCE_STEPS="$VIDEO_INFERENCE_STEPS" ACTION_INFERENCE_STEPS="$ACTION_INFERENCE_STEPS" \
+  bash "$FULL_REPO/inference/start_server.sh" > "$SRV_LOG" 2>&1 &
+SRV_PID=$!
+trap 'kill "$SRV_PID" 2>/dev/null || true' EXIT
+
+# ---- 4. wait until the server is serving (cap 20 min: first run compiles ROCm kernels) ----
+echo "[server] waiting for readiness ..."
+for i in $(seq 1 240); do
+  if grep -qiE "serving on ws|Uvicorn running|server (ready|started)|Listening" "$SRV_LOG" 2>/dev/null; then
+    echo "[server] ready after ${i}x5s"; break
+  fi
+  if ! kill -0 "$SRV_PID" 2>/dev/null; then echo "ERROR: server died; tail:" >&2; tail -n 30 "$SRV_LOG" >&2; exit 1; fi
+  sleep 5
+done
+
+# ---- 5. run RoboTwin eval via the upstream policy plugin (client waits for the server too) ----
+echo "########## FlowWAM closed-loop RoboTwin $TASK ($TASK_CONFIG, seed=$SEED) ##########"
+ROBOTWIN_ROOT=/opt/RoboTwin SERVER_HOST=0.0.0.0 SERVER_PORT="$PORT" EXECUTE_WINDOW="$EXECUTE_WINDOW" \
+  bash "$FULL_REPO/inference/robotwin_policy/eval.sh" "$TASK" "$TASK_CONFIG" "$SEED" "$GPU_ID" \
+  2>&1 | grep -viE 'svulkan2|Failed to initialize denoiser|cudaErrorInsufficientDriver'
+RC=$?
+
+# ---- 6. collect RoboTwin's per-episode videos + result files ----
+RES="/opt/RoboTwin/eval_result/$TASK/flowwam/$TASK_CONFIG"
+if [ -d "$RES" ]; then cp -r "$RES"/* "$OUT_DIR"/ 2>/dev/null || true; fi
+echo "[done] rc=$RC  results -> $OUT_DIR"
+exit "$RC"
