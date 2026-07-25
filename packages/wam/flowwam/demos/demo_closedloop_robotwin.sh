@@ -36,6 +36,7 @@ SEED="${SEED:-0}"
 GPU_ID="${GPU_ID:-0}"
 PORT="${PORT:-8000}"
 EXECUTE_WINDOW="${EXECUTE_WINDOW:-25}"       # actions executed per replan (chunk = 1 anchor + this)
+NUM_EPISODES="${NUM_EPISODES:-3}"            # eval episodes (upstream full-eval default is 100)
 VIDEO_INFERENCE_STEPS="${VIDEO_INFERENCE_STEPS:-25}"
 ACTION_INFERENCE_STEPS="${ACTION_INFERENCE_STEPS:-50}"
 OUT_DIR="${OUT_DIR:-/outputs/closedloop_robotwin/$TASK}"
@@ -62,6 +63,13 @@ bash /ryzers/scripts/download_checkpoints.sh base
 bash /ryzers/scripts/download_checkpoints.sh robotwin
 [ -f "$CKPT" ] || { echo "ERROR: missing $CKPT" >&2; exit 1; }
 
+# ---- 2.5 fetch + wire RoboTwin sim assets (embodiments/objects/task_config) into /opt/RoboTwin ----
+# One-time (idempotent via the .ready marker). ryzers run already mounts the assets volume and sets
+# ROBOTWIN_ASSETS_DIR (inherited from the simulation/robotwin base); this links assets/task_config in
+# and routes the aloha-agilex planner curobo->mplib for ROCm. Required: RoboTwin's envs import these.
+SETUP="$(ls /ryzers/scripts/setup_robotwin.sh 2>/dev/null || find / -name setup_robotwin.sh 2>/dev/null | head -1)"
+[ -n "$SETUP" ] && bash "$SETUP" || echo "WARN: setup_robotwin.sh not found; assets may be missing" >&2
+
 # ---- 3. start the flow-action inference server (background) ----
 mkdir -p "$OUT_DIR"
 SRV_LOG="$OUT_DIR/server.log"
@@ -69,8 +77,14 @@ echo "[server] launching flow_action_server on ws://0.0.0.0:$PORT (log: $SRV_LOG
 # Give the server the REAL FlowWAM repo's diffsynth (action expert / dual-stream) WITHOUT replacing
 # the installed WorldArena diffsynth that the open-loop world-model eval (P5) imports. Runtime path
 # precedence avoids a second venv; if a build-time import conflict surfaces, split into its own venv.
+#
+# gfx1151 default-route speedups (quality-preserving; docs: RUNTIME_OPTIMIZATION.md): route the
+# upstream start_server.sh's PYTHON through opt_launch.py, which arms the bit-exact cross-attn K/V +
+# text-embedding cache and torch.compile of the dual-stream block fn BEFORE running the upstream
+# flow_action_server.py verbatim. Disable with FLOWWAM_OPT=0 (or FLOWWAM_CACHE=0 / FLOWWAM_COMPILE=0).
 CHECKPOINT="$CKPT" ACTION_NORM_PATH="$NORM" LOCAL_MODEL_PATH="$MDIR" \
   PYTHONPATH="$FULL_REPO:${PYTHONPATH:-}" \
+  PYTHON="${FLOWWAM_PYTHON:-/ryzers/scripts/opt_python.sh}" \
   HOST=0.0.0.0 PORT="$PORT" DEVICE=cuda \
   VIDEO_INFERENCE_STEPS="$VIDEO_INFERENCE_STEPS" ACTION_INFERENCE_STEPS="$ACTION_INFERENCE_STEPS" \
   bash "$FULL_REPO/inference/start_server.sh" > "$SRV_LOG" 2>&1 &
@@ -87,10 +101,17 @@ for i in $(seq 1 240); do
   sleep 5
 done
 
-# ---- 5. run RoboTwin eval via the upstream policy plugin (client waits for the server too) ----
-echo "########## FlowWAM closed-loop RoboTwin $TASK ($TASK_CONFIG, seed=$SEED) ##########"
-ROBOTWIN_ROOT=/opt/RoboTwin SERVER_HOST=0.0.0.0 SERVER_PORT="$PORT" EXECUTE_WINDOW="$EXECUTE_WINDOW" \
-  bash "$FULL_REPO/inference/robotwin_policy/eval.sh" "$TASK" "$TASK_CONFIG" "$SEED" "$GPU_ID" \
+# ---- 5. run RoboTwin eval via the upstream policy plugin + stock eval_policy.py ----
+# Mirrors upstream inference/robotwin_policy/eval.sh (symlink policy/flowwam + stock eval_policy.py;
+# NO RoboTwin source edits) but exposes NUM_EPISODES (upstream eval.sh hardcodes the full 100-ep run).
+echo "########## FlowWAM closed-loop RoboTwin $TASK ($TASK_CONFIG, seed=$SEED, $NUM_EPISODES ep) ##########"
+ln -sfn "$FULL_REPO/inference/robotwin_policy" /opt/RoboTwin/policy/flowwam
+export no_proxy="127.0.0.1,localhost,0.0.0.0,${no_proxy:-}"; export NO_PROXY="$no_proxy"
+( cd /opt/RoboTwin && PYTHONWARNINGS=ignore::UserWarning python script/eval_policy.py \
+    --config policy/flowwam/deploy_policy.yml --overrides \
+    --task_name "$TASK" --task_config "$TASK_CONFIG" --ckpt_setting flowwam --seed "$SEED" \
+    --policy_name flowwam --server_host 0.0.0.0 --server_port "$PORT" \
+    --action_chunk_size "$((1 + EXECUTE_WINDOW))" --eval_num_episodes "$NUM_EPISODES" ) \
   2>&1 | grep -viE 'svulkan2|Failed to initialize denoiser|cudaErrorInsufficientDriver'
 RC=$?
 

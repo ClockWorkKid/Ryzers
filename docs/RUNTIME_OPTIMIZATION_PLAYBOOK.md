@@ -289,5 +289,34 @@ specific negatives**, not universal — re-evaluate on different hardware or a l
   tracks cross-attn context length, which is small relative to the video self-attention here. **Always
   profile the split before picking the lever.**
 
+### FlowWAM (Wan2.2-TI2V-5B dual-stream RGB+flow world model + IDM action expert) — closed-loop flow-action path
+- **Bottleneck class: video-DiT-bound (the OPPOSITE of FastWAM).** FlowWAM fully denoises a
+  dual-stream (RGB+flow) video every replan, so the **video DiT forward is 91.6% of an 80.97 s
+  replan** (25 video steps @ 2845 ms + 1 capture); the IDM action expert is only 6.9%. Detail:
+  `packages/wam/flowwam/RUNTIME_OPTIMIZATION.md`.
+- Structural wins already in place: **decoder skipped** (§3.2, `save_videos=off`) + **text encoder
+  episode-cached** (§2.2, per-instruction). Intra-forward: FFN(ffn=14336) ~26%, fp32 norm/modulate
+  tail ~36%, qkvo ~9%, text cross-attn ~8%, SDPA-core ~6% (already flash/efficient), fp64 RoPE ~3%.
+- **Net shipped = 1.042× (quality-preserving, baked into the closed-loop demo default route).**
+  Same-harness composition (shipped `flowwam_opt.patch_class()`): cache-only **1.019× bit-exact**,
+  compile-only **1.030×**, **cache × compile 1.042×** (near-lossless, rgb cos 0.99995). The two
+  levers DO compose (cache kept `dynamo.disable` so compile still fuses the tail while K/V is served
+  from cache). Baked via `scripts/flowwam_opt.py` + `opt_launch.py` + `opt_python.sh` (PYTHON shim
+  into the unedited upstream `start_server.sh`); env kill-switches `FLOWWAM_OPT/CACHE/COMPILE`,
+  eager fallback on any error. NB: standalone A/Bs read higher for compile (1.051×) but cross-run
+  baselines drift — trust the same-harness stack number.
+- **Evaluated, not adopted: W8A8 int8 = 0.79× (REGRESSION).** Corrects the "big-GEMM ⇒ quant win"
+  hypothesis: on gfx1151 `_int_mm` is **0.28×** on ffn-up (3072→14336) and the per-token dequant
+  over the 14336-wide output is bandwidth-bound; only ffn-down 1.17×. Quant does NOT help even a
+  big-GEMM loop on this ROCm stack. (SDPA backend already optimal; fp64→fp32 RoPE low-ROI + inexact.)
+- **Model-specific lever — dual-stream asymmetry: 1.61× but too lossy at DS=2.** Running the flow
+  stream at half res (480→120 tok/frame; no model_fn change) shrinks joint attention + quarters
+  flow-side qkvo/FFN → 1.61× on the DiT loop, but closed-loop `beat_block_hammer` fell 100%→60%
+  (3/5). **Open lever (highest upside):** milder DS sweet-spot or a short finetune at reduced flow
+  res. Env-gated `FLOW_DS`.
+- **Lesson (transfers):** for a video-DiT world model the payoff order is decoder-skip ≫ NFE/
+  distillation ≫ (secondary-stream token reduction, needs quality budget) ≫ compile ≫ cross-attn
+  cache; quant and attention-backend swaps were dead ends on gfx1151.
+
 ### (template for the next model)
 - Net shipped: … / bottleneck class: … / structural wins (decoder skip, caches): … / evaluated-not-adopted: … / open levers: …

@@ -6,7 +6,7 @@
 # DiffSynth local_model_path layout ($FLOWWAM_MODEL_DIR/<model_id>/<file>). Nothing is
 # re-hosted (rules 8/9); everything comes from the original HF repos on demand.
 #
-#   ryzers run /ryzers/scripts/download_checkpoints.sh [base|stage1|embodiments|all]
+#   ryzers run /ryzers/scripts/download_checkpoints.sh [base|stage1|robotwin|embodiments|all]
 #
 # Components (SeedVR2 refiner deliberately EXCLUDED -- deferred, apex is CUDA-only):
 #   base        Wan2.2-TI2V-5B (UMT5-XXL enc + DiT + VAE) + Wan2.1-T2V-1.3B tokenizer  (~12 GB)
@@ -35,6 +35,16 @@ dl_base() {
   hf_prefetch Wan-AI/Wan2.1-T2V-1.3B \
     --include "google/*" "models_t5_umt5-xxl-enc-bf16.pth" \
     --local-dir "$MDIR/Wan-AI/Wan2.1-T2V-1.3B"
+  # Layout note: the OPEN-LOOP world-model build_pipeline redirects the shared T5 to Wan2.1
+  # (redirect_common_files=True), but the CLOSED-LOOP flow-action server's pipeline_loader loads
+  # models_t5 with model_id=Wan-AI/Wan2.2-TI2V-5B + explicit local_model_path (no redirect), i.e.
+  # it expects the file under Wan2.2-TI2V-5B/. Expose the same weight under both layouts so either
+  # eval mode works from one cache (symlink; no re-download, rules 8/9).
+  local t5="models_t5_umt5-xxl-enc-bf16.pth"
+  if [ -f "$MDIR/Wan-AI/Wan2.1-T2V-1.3B/$t5" ] && [ ! -e "$MDIR/Wan-AI/Wan2.2-TI2V-5B/$t5" ]; then
+    ln -sfn "../Wan2.1-T2V-1.3B/$t5" "$MDIR/Wan-AI/Wan2.2-TI2V-5B/$t5"
+    echo "    linked $t5 into Wan2.2-TI2V-5B/ (closed-loop server layout)"
+  fi
 }
 
 dl_stage1() {

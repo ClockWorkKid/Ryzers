@@ -54,6 +54,22 @@ ryzers run --name flowwam-robotwin /ryzers/demos/demo_closedloop_robotwin.sh   #
 Artifacts are written under `workspace/flowwam/outputs`. The SeedVR2 refiner is intentionally
 out of this image (its apex dependency is CUDA-only); the deliverable is stage-1 video gen.
 
+### Runtime optimizations (gfx1151, default-on)
+
+The closed-loop demo routes the flow-action server through `scripts/opt_launch.py`
+(`PYTHON=/ryzers/scripts/opt_python.sh`), which arms two measured, **quality-preserving** speedups
+on the dominant (~91%) dual-stream video-DiT stage **without editing upstream**:
+
+- **Cross-attn K/V + text-embedding cache** — the instruction is fixed per episode, so text-context
+  K/V are cached across the 25 diffusion steps (**bit-exact**, 1.019×).
+- **`torch.compile[default]` of the dual-stream block fn** — fuses the fp32 norm/modulate/FFN tail
+  (near-lossless, cos 0.9999). One-time ~80 s Inductor compile on the first replan.
+
+Stacked ≈ **1.042×** on the video-DiT loop, closed-loop success preserved. Env kill-switches
+(default ON): `FLOWWAM_OPT=0` (all) / `FLOWWAM_CACHE=0` / `FLOWWAM_COMPILE=0`; any error falls back
+to eager. The lossy flow-downsample lever (`FLOW_DS`, ~1.6× but drops success) is **not** default —
+experimental only. Full analysis: `RUNTIME_OPTIMIZATION.md`.
+
 ### References
 
 - Open-loop (world model): https://github.com/YixiangChen515/FlowWAM_WorldArena (pinned in `docs/UPSTREAM_PIN.commit.txt`)
