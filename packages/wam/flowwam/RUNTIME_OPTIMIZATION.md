@@ -52,7 +52,7 @@ Ruled out by measurement: SDPA backend is already optimal; the DiT stays GPU-res
 | Cross-attn K/V + text-embed cache (§2.1) | general | **1.019×** | bit-exact (max\|Δ\|=0) | **adopt** (free, minor) |
 | torch.compile block fn (§4) | conditional | **1.051×** | near-lossless (cos 0.9999), one-time 78 s compile | **adopt** (modest) |
 | W8A8 int8 FFN(+qkvo) (§2.5) | general* | **0.79×** | lossy | **REJECT — regression** |
-| **Dual-stream asymmetry** (flow DS=2, unique) | model-specific | **1.61×** | closed-loop 3/5 (60%) vs 3/3 baseline | **too lossy at DS=2** |
+| **Dual-stream asymmetry** (flow grid, unique) | model-specific | **1.27× @ 18×16 … 1.65× @ DS2** | cos ~0.93 (NOT near-lossless); closed-loop 5/5 on beat_block_hammer at 18×16 **and** DS2 | **opt-in "fast" preset, NOT default** |
 | fp64→fp32 RoPE | conditional | ~1.02× (est.) | max\|Δ\|=0.18, not exact | skip (low ROI) |
 
 ### Why W8A8 is a regression here (correction to the playbook hypothesis)
@@ -62,15 +62,34 @@ pay off — but it does **not** on this ROCm stack. Isolated `torch._int_mm` at 
 dequant over the 14336-wide output is bandwidth-bound and `_int_mm` isn't tuned for the up-proj
 shape. **Big-GEMM ≠ quant win on gfx1151.**
 
-### FlowWAM-unique lever: dual-stream asymmetry
-The flow stream shares the DiT blocks and is a secondary motion channel. Running it at half spatial
-resolution (480→120 tokens/frame) shrinks the joint self-attention and quarters the flow-side
-qkvo/FFN/RoPE — **no model_fn change needed** (the flow grid/RoPE/head derive from the flow-latent
-shape). Result: **1.61× on the DiT loop**, but the RGB latent moved (cos 0.92) and closed-loop
-`beat_block_hammer` dropped **100% → 60% (3/5)**. Server-side, env-gated via `FLOW_DS`
-(`agent_scripts/flowwam_p8_val_server.sh`). **Open:** a milder reduction (single-dim downsample, or
-~0.75× area) or a short finetune at reduced flow res to recover success — this is the highest-upside
-remaining direction and is genuinely FlowWAM-specific.
+### FlowWAM-unique lever: dual-stream asymmetry (milder-grid sweep)
+The flow stream shares the DiT blocks and is a secondary motion channel. Running it at reduced
+spatial resolution shrinks the joint self-attention and the flow-side qkvo/FFN/RoPE — **no model_fn
+change needed** (the flow grid/RoPE/head derive from the flow-latent shape). The full-res flow grid
+matches RGB (**24×20 = 480 tok/frame**); DS=2 == 12×10. Sweep vs the full-res flow (25-step loop):
+
+| flow grid | tok/fr | area% | speedup | rgb cos |
+|---|---|---|---|---|
+| 24×20 (full) | 480 | 100 | 1.00× | 1.0000 |
+| 22×18 | 396 | 82.5 | 1.12× | 0.9307 |
+| 20×18 | 360 | 75.0 | 1.14× | 0.9353 |
+| **18×16** | 288 | 60.0 | **1.27×** | **0.9355** |
+| 16×14 | 224 | 46.7 | 1.42× | 0.9099 |
+| 14×12 | 168 | 35.0 | 1.51× | 0.9222 |
+| 12×10 (=DS2) | 120 | 25.0 | 1.65× | 0.9212 |
+
+**Key finding: RGB fidelity cliffs to cos ~0.93 at the *first* reduction and plateaus** — there is
+**no near-lossless milder region**. Best speed-per-fidelity is **18×16 (1.27×, cos 0.9355)**.
+Closed-loop `beat_block_hammer` (5 ep, seed 0) is **5/5 at 24×20, 18×16, and 12×10 alike** — success
+is preserved across the whole range on this task (which sits near the success ceiling, so it does
+not separate the configs; this **revises the earlier "DS2 = 3/5"** — that was a noisier / smaller-
+sample point). A harder task (`handover_block`) ran too long to score quickly and is deferred.
+
+**Verdict:** usable **opt-in "fast" preset** (recommended `FLOW_GRID=18x16`, +1.27× on the video-DiT
+stage, composes with the baked cache+compile), but **not a default** — cos ~0.93 is a real fidelity
+trade, so it needs broader multi-task/multi-seed validation before promotion. Server-side, env-gated
+via `FLOW_GRID` / `FLOW_DS` (`agent_scripts/flowwam_p8_patch_server2.sh` +
+`flowwam_asym_clsweep.sh`; speed/fidelity sweep `flowwam_p8_asym_sweep.py`).
 
 ## Baked default route (shipped)
 The two quality-preserving levers are **baked into the default inference path** of the closed-loop
@@ -101,9 +120,11 @@ break because of an optimization. First replan pays a one-time ~80 s Inductor co
 ## Net + open levers
 - **Shipped (default, quality-preserving) = 1.042×**: cross-attn K/V + text cache (bit-exact) ×
   torch.compile[block] (near-lossless), baked into the closed-loop demo route.
-- **Open**: dual-stream asymmetry at a validated sweet-spot DS (biggest upside, ~1.6× but lossy at
-  DS=2 — deliberately NOT default; experimental `FLOW_DS` knob only); fewer NFE / distillation
-  (§2.6, out of P8 scope — the known knob).
+- **Opt-in fast preset = +1.27× (18×16 flow)**: dual-stream asymmetry sweet-spot (composes with the
+  default route → ~1.3×+ on the video-DiT stage). Success-preserving on the reference task but cos
+  ~0.93 (not near-lossless) → env knob `FLOW_GRID=18x16`, **not default**; needs broader validation.
+- **Open**: broader multi-task/multi-seed validation of the 18×16 preset (a faster harder task than
+  `handover_block`); fewer NFE / distillation (§2.6, out of P8 scope — the known knob).
 
 ## Reproduce
 Profilers/A-B harnesses (agent scripts, run in `flowwam-robotwin` via `flowwam_p8_run.sh`):
