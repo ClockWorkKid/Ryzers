@@ -19,7 +19,7 @@ import torch.nn.functional as F
 class DistillLossWeights:
     cosine: float = 1.0
     norm_mse: float = 1.0
-    downstream: float = 0.0   # 0 -> off; enable once pool+projector are wired
+    downstream: float = 0.0   # 0 -> off; see seam_downstream_loss (pool+projector wired)
 
 
 def seam_cosine_loss(student: torch.Tensor, teacher: torch.Tensor) -> torch.Tensor:
@@ -36,6 +36,37 @@ def seam_norm_mse_loss(student: torch.Tensor, teacher: torch.Tensor, eps: float 
     t = teacher.float()
     scale = t.norm(dim=-1, keepdim=True).clamp_min(eps)
     return F.mse_loss(s / scale, t / scale)
+
+
+def seam_downstream_loss(
+    student_tokens: torch.Tensor,
+    teacher_tokens: torch.Tensor,
+    valid: torch.Tensor | None = None,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """Consistency of the pooled+projected tokens the LLM actually consumes.
+
+    ``student_tokens``/``teacher_tokens`` are the outputs of the *frozen* 2x2
+    attention-pool + vision->LLM projector applied to the student/teacher seam
+    (shape ``[..., T, H]``). This is the downstream-aligned analogue of the seam
+    loss: a scale-invariant cosine term (token direction) plus a per-token
+    normalized-MSE term (magnitude), averaged over the valid tokens only.
+
+    Root-cause note: raw-seam fidelity was found to be *anti*-correlated with
+    closed-loop success, so we match the student to the teacher in the space the
+    policy head is co-adapted to (post-pool+projector) instead of raw seam space.
+    """
+    s = student_tokens.float()
+    t = teacher_tokens.float()
+    cos = F.cosine_similarity(s, t, dim=-1)              # [..., T]
+    scale = t.norm(dim=-1, keepdim=True).clamp_min(eps)  # [..., T, 1]
+    nmse = ((s - t) / scale).pow(2).mean(dim=-1)         # [..., T]
+    cos_term = 1.0 - cos                                 # [..., T]
+    if valid is not None:
+        m = valid.to(cos.dtype)
+        denom = m.sum().clamp_min(1.0)
+        return (cos_term * m).sum() / denom + (nmse * m).sum() / denom
+    return cos_term.mean() + nmse.mean()
 
 
 def distill_loss(

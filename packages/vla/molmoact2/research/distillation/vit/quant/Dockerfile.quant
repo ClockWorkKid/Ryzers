@@ -1,0 +1,22 @@
+# Thin quant layer on top of the vit_distill base (rule 0.4: add a layer, don't
+# rebuild the base). Adds Brevitas + QONNX + ONNX tooling for PTQ/QAT/export.
+# The base already has torch 2.9.1 / ROCm 7.2 / torchdistill / lerobot[molmoact2].
+#
+#   DOCKER_BUILDKIT=1 docker build -t molmoact2-vitquant:rocm950 \
+#       -f quant/Dockerfile.quant .
+ARG BASE=molmoact2-vitdistill:rocm950
+FROM ${BASE}
+SHELL ["/bin/bash", "-lc"]
+
+# torch>=2.9 in the base -> the dynamo QONNX export path is available; the tracing
+# path is the fallback (see export_qonnx_student.py --export-mode auto).
+RUN pip install --no-cache-dir \
+      "brevitas>=0.11" qonnx "onnx>=1.16" onnxscript onnxoptimizer onnxruntime \
+    && python -c "import brevitas, qonnx, onnx; print('brevitas', brevitas.__version__, 'onnx', onnx.__version__)"
+
+# Mirror the quant + distill packages into the image PYTHONPATH.
+COPY distill /opt/vit_distill/distill
+COPY quant   /opt/vit_distill/quant
+ENV PYTHONPATH=/opt/vit_distill
+
+RUN python -c "import quant.quant_student, quant.variants, quant.calibrate, quant.export_qonnx_student; print('quant import OK')"
