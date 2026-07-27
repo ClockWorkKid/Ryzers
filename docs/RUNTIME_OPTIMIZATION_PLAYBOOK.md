@@ -313,12 +313,14 @@ specific negatives**, not universal — re-evaluate on different hardware or a l
   Running the flow stream at a reduced grid (full = 24×20 = 480 tok/frame; no model_fn change)
   shrinks joint attention + flow-side qkvo/FFN. Milder-grid sweep: RGB-latent fidelity **cliffs to
   cos ~0.93 at the first reduction and plateaus** (no near-lossless region); best speed-per-fidelity
-  = **18×16 (1.27×, cos 0.9355)**, DS2=12×10 (1.65×, cos 0.921). Closed-loop `beat_block_hammer`
-  (5 ep) = **5/5 at 24×20, 18×16 AND 12×10** — success preserved across the range on this near-
-  ceiling task (this **revises the earlier "DS2 3/5"**, which was a noisier smaller sample). Verdict:
-  ship as opt-in `FLOW_GRID=18x16` (composes with the default cache+compile → ~1.3×+), **not
-  default** (cos 0.93 is a real trade); needs a harder discriminating task (`handover_block` ran too
-  long to score). Lesson: **for a secondary-stream token-reduction lever, a per-latent cos metric is
+  = **18×16 (1.27×, cos 0.9355)**, DS2=12×10 (1.65×, cos 0.921). Closed-loop on DISCRIMINATING
+  in-distribution tasks (10 ep/config, seed base 100000): `click_bell` = 8/10 baseline → **9/10 @
+  18×16 (1.28× wall)** → 6/10 @ DS2; `lift_pot` (matched first-6 seeds) = 4/6 baseline = **4/6 @
+  18×16 (identical)** → 3/6 @ DS2. (`beat_block_hammer` = 5/5 across all grids — a ceiling task that
+  cannot separate configs; `place_object_basket`/`handover_block` floor at ~0 and run ~30 min/ep, not
+  tractable.) Verdict: ship as opt-in `FLOW_GRID=18x16` (quality-preserving on discriminating tasks,
+  composes with the default cache+compile → ~1.3×+), **not default** (cos 0.93 is a real trade; DS2
+  degrades -20 pts with no wall win — its per-step saving is erased by extra full-horizon failures). Lesson: **for a secondary-stream token-reduction lever, a per-latent cos metric is
   a poor success predictor — it saturates immediately; validate closed-loop on a DISCRIMINATING
   (non-ceiling) task, and keep episode/seed protocol identical across configs.**
 - **Lesson (transfers):** for a video-DiT world model the payoff order is decoder-skip ≫ NFE/

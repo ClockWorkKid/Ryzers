@@ -52,7 +52,7 @@ Ruled out by measurement: SDPA backend is already optimal; the DiT stays GPU-res
 | Cross-attn K/V + text-embed cache (§2.1) | general | **1.019×** | bit-exact (max\|Δ\|=0) | **adopt** (free, minor) |
 | torch.compile block fn (§4) | conditional | **1.051×** | near-lossless (cos 0.9999), one-time 78 s compile | **adopt** (modest) |
 | W8A8 int8 FFN(+qkvo) (§2.5) | general* | **0.79×** | lossy | **REJECT — regression** |
-| **Dual-stream asymmetry** (flow grid, unique) | model-specific | **1.27× @ 18×16 … 1.65× @ DS2** | cos ~0.93 (NOT near-lossless); closed-loop 5/5 on beat_block_hammer at 18×16 **and** DS2 | **opt-in "fast" preset, NOT default** |
+| **Dual-stream asymmetry** (flow grid, unique) | model-specific | **1.27× @ 18×16 … 1.65× @ DS2** | cos ~0.93 (NOT near-lossless); closed-loop 18×16 preserves success (click_bell 9/10 vs 8/10 @1.28×), DS2 degrades -20 pts | **opt-in "fast" preset, NOT default** |
 | fp64→fp32 RoPE | conditional | ~1.02× (est.) | max\|Δ\|=0.18, not exact | skip (low ROI) |
 
 ### Why W8A8 is a regression here (correction to the playbook hypothesis)
@@ -80,16 +80,29 @@ matches RGB (**24×20 = 480 tok/frame**); DS=2 == 12×10. Sweep vs the full-res 
 
 **Key finding: RGB fidelity cliffs to cos ~0.93 at the *first* reduction and plateaus** — there is
 **no near-lossless milder region**. Best speed-per-fidelity is **18×16 (1.27×, cos 0.9355)**.
-Closed-loop `beat_block_hammer` (5 ep, seed 0) is **5/5 at 24×20, 18×16, and 12×10 alike** — success
-is preserved across the whole range on this task (which sits near the success ceiling, so it does
-not separate the configs; this **revises the earlier "DS2 = 3/5"** — that was a noisier / smaller-
-sample point). A harder task (`handover_block`) ran too long to score quickly and is deferred.
+Closed-loop on **discriminating** in-distribution tasks (10 ep/config, seed base 100000, identical
+protocol). `beat_block_hammer` sits at the success ceiling (5/5 across all grids) and cannot separate
+the configs, so we benchmarked in-distribution tasks whose baseline is *partial*:
 
-**Verdict:** usable **opt-in "fast" preset** (recommended `FLOW_GRID=18x16`, +1.27× on the video-DiT
-stage, composes with the baked cache+compile), but **not a default** — cos ~0.93 is a real fidelity
-trade, so it needs broader multi-task/multi-seed validation before promotion. Server-side, env-gated
-via `FLOW_GRID` / `FLOW_DS` (`agent_scripts/flowwam_p8_patch_server2.sh` +
-`flowwam_asym_clsweep.sh`; speed/fidelity sweep `flowwam_p8_asym_sweep.py`).
+| task | baseline 24×20 | 18×16 | DS2 12×10 |
+|---|---|---|---|
+| `click_bell` (10 ep) | 8/10 = 80% (1891 s) | **9/10 = 90% (1472 s, 1.28×)** | 6/10 = 60% (2271 s, 0.83×) |
+| `lift_pot` (matched first-6 seeds) | 4/6 = 66.7% | **4/6 = 66.7% (identical)** | 3/6 = 50% |
+
+**18×16 preserves task success** (click_bell ≥ baseline within episode noise; lift_pot bit-for-bit
+matched on shared seeds) **while delivering a measured 1.28× closed-loop wall speedup** on click_bell.
+**DS2 (12×10) is rejected**: -20 pts (click_bell) / -17 pts (lift_pot matched) AND *no* wall win —
+the extra failures run to the full sim horizon, so the per-step inference saving is erased (2271 s >
+1891 s baseline). `place_object_basket` and `handover_block` floor at ~0 and run ~30 min/ep (not
+tractable / non-discriminating), so they are excluded.
+
+**Verdict:** shippable **opt-in "fast" preset** — recommended `FLOW_GRID=18x16` (+1.27× on the
+video-DiT stage; ~1.28× measured end-to-end closed-loop, composes with the baked cache+compile),
+now **validated quality-preserving on discriminating tasks** but **still not a default** (cos ~0.93
+is a real fidelity trade, and DS2 shows how the cliff degrades harder tasks with no wall win).
+Server-side, env-gated via `FLOW_GRID` / `FLOW_DS` (`agent_scripts/flowwam_p8_patch_server2.sh` +
+`flowwam_asym_clsweep.sh` / multi-task bench `flowwam_asym_bench.sh`; speed/fidelity sweep
+`flowwam_p8_asym_sweep.py`).
 
 ## Baked default route (shipped)
 The two quality-preserving levers are **baked into the default inference path** of the closed-loop
@@ -121,10 +134,11 @@ break because of an optimization. First replan pays a one-time ~80 s Inductor co
 - **Shipped (default, quality-preserving) = 1.042×**: cross-attn K/V + text cache (bit-exact) ×
   torch.compile[block] (near-lossless), baked into the closed-loop demo route.
 - **Opt-in fast preset = +1.27× (18×16 flow)**: dual-stream asymmetry sweet-spot (composes with the
-  default route → ~1.3×+ on the video-DiT stage). Success-preserving on the reference task but cos
-  ~0.93 (not near-lossless) → env knob `FLOW_GRID=18x16`, **not default**; needs broader validation.
-- **Open**: broader multi-task/multi-seed validation of the 18×16 preset (a faster harder task than
-  `handover_block`); fewer NFE / distillation (§2.6, out of P8 scope — the known knob).
+  default route → ~1.3×+ on the video-DiT stage). **Validated quality-preserving on discriminating
+  closed-loop tasks** (click_bell 9/10 vs 8/10 baseline @1.28× wall; lift_pot matched) → env knob
+  `FLOW_GRID=18x16`, **not default** (cos ~0.93; DS2 12×10 degrades -20 pts with no wall win).
+- **Open**: fewer NFE / distillation (§2.6, out of P8 scope — the known knob); wider multi-seed
+  sweep of 18×16 only if it is ever promoted toward default.
 
 ## Reproduce
 Profilers/A-B harnesses (agent scripts, run in `flowwam-robotwin` via `flowwam_p8_run.sh`):
