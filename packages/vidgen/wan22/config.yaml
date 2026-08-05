@@ -1,0 +1,74 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+### ryzers build options
+
+init_image: rocm/pytorch:rocm7.14_ubuntu24.04_py3.12_pytorch_release_2.10.0
+
+x11_display: false
+
+build_arguments:
+- "WAN22_COMMIT=42bf4cfaa384bc21833865abc2f9e6c0e67233dc"
+
+### ryzers run options
+
+environment_variables:
+- "PYTHONPATH=/opt/wan22-overlay/python:/opt/Wan2.2"
+- "TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1"
+- "TORCH_BLAS_PREFER_HIPBLASLT=1"
+- "FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE"
+- "WAN22_DISABLE_CUDNN=1"
+# ROCm PyTorch keys the caching-allocator on PYTORCH_HIP_ALLOC_CONF; the generic
+# PYTORCH_ALLOC_CONF is silently ignored on this build, which left the allocator
+# non-expandable and OOM'd 121f i2v (rope_apply) with ~27 GB free (fragmentation).
+# Set both so expandable_segments actually engages.
+- "PYTORCH_ALLOC_CONF=expandable_segments:True"
+- "PYTORCH_HIP_ALLOC_CONF=expandable_segments:True"
+- "WAN22_MODELS_DIR=${WAN22_MODELS_DIR:-$HOME/workspace/wan22/models}"
+- "CKPT_DIR=/models/Wan2.2-TI2V-5B"
+- "OUT_DIR=/outputs"
+- "AUTO_DOWNLOAD=1"
+- 'PROMPT="${PROMPT:-}"'
+- 'PROMPT_FILE="${PROMPT_FILE:-}"'
+- 'SIZE="${SIZE:-}"'
+- 'FRAME_NUM="${FRAME_NUM:-}"'
+- 'DURATION_SECONDS="${DURATION_SECONDS:-}"'
+- 'WAN_SECONDS="${WAN_SECONDS:-}"'
+- 'SAMPLE_STEPS="${SAMPLE_STEPS:-}"'
+- 'SEED="${SEED:-}"'
+- 'SAVE_FILE="${SAVE_FILE:-}"'
+- 'BENCHMARK_JSON="${BENCHMARK_JSON:-}"'
+- 'IMAGE="${IMAGE:-}"'
+# --- Fast route (production default): lossless bf16 VAE + feathered-overlap
+#     tiling + batched tile decode + bit-exact text/cross-attn KV cache. Tiles
+#     are 12x12 latent with stride 8 (4-cell/64px overlap) and cross-faded so no
+#     tile seams are visible. WAN22_VAE_OFFLOAD frees the i2v encode residue so
+#     121f fits in VRAM. Override any lever by exporting the env var before run.
+- 'WAN22_VAE_BF16="${WAN22_VAE_BF16:-1}"'
+- 'WAN22_TEXT_KV_CACHE="${WAN22_TEXT_KV_CACHE:-1}"'
+- 'WAN22_VAE_OFFLOAD="${WAN22_VAE_OFFLOAD:-1}"'
+- 'TILE_H="${TILE_H:-12}"'
+- 'TILE_W="${TILE_W:-12}"'
+- 'STRIDE_H="${STRIDE_H:-8}"'
+- 'STRIDE_W="${STRIDE_W:-8}"'
+- 'CROP_MARGIN="${CROP_MARGIN:-0}"'
+- 'VAE_TILE_BATCH="${VAE_TILE_BATCH:-8}"'
+- 'WAN22_DIT_TIMING="${WAN22_DIT_TIMING:-1}"'
+# CFG batching is neutral on this bandwidth-bound stack and only patches the
+# t2v loop, so it stays opt-in (does not affect i2v).
+- 'WAN22_CFG_BATCH="${WAN22_CFG_BATCH:-0}"'
+# --- Failure-mode levers (kept for probing only; OFF by default). See
+#     FAILURE_MODES.md: torch.compile corrupts output on ROCm 7.14 and ToMe
+#     buys <3% while degrading detail on this bandwidth-bound pipeline.
+- 'WAN22_TORCH_COMPILE="${WAN22_TORCH_COMPILE:-0}"'
+- 'WAN22_COMPILE_MODE="${WAN22_COMPILE_MODE:-default}"'
+- 'WAN22_COMPILE_TARGETS="${WAN22_COMPILE_TARGETS:-dit}"'
+- 'WAN22_TOME_R="${WAN22_TOME_R:-0}"'
+
+volume_mappings:
+- "${WAN22_MODELS_DIR:-$HOME/workspace/wan22/models}:/models"
+- "$PWD/workspace/wan22/outputs:/outputs"
+- "$PWD/workspace/.cache/huggingface:/root/.cache/huggingface"
+
+docker_extra_run_flags: "--ipc=host --shm-size=8g"
+
