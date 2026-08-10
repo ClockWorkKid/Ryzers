@@ -63,6 +63,26 @@ three compounding effects, none a model bug (full analysis + evidence in
 
 `demos/demo_videogen.sh` enables all three by default.
 
+### Video imagination
+
+With the fix on, the model *imagines the future in the real scene*. Below, the real DROID
+observation is held on the **left**; the model's imagined future (its predicted video, decoded
+with the looping fix) plays on the **right**. Episode 0 — task *"Pick up the blue ring from the
+table and put it in the wooden tray"* (native 5 fps; peak VRAM ~42 GiB on `gfx1151`).
+
+<p align="center">
+  <img src="assets/dz_streaming_vs_anchor.gif" alt="real anchor vs imagined future, rolling-overlap streaming decode" width="600">
+  <br><em>Rolling-overlap streaming decode (the looping fix): real anchor (left) vs imagined rollout (right) — coherent forward progress, no re-looping.</em>
+</p>
+<p align="center">
+  <img src="assets/dz_grounded_vs_anchor.gif" alt="real anchor vs imagined future, grounded rollout" width="600">
+  <br><em>Grounded rollout: real anchor (left) vs the model's imagined future (right).</em>
+</p>
+<p align="center">
+  <img src="assets/dz_ar_imagination.gif" alt="autoregressive imagination pass" width="420">
+  <br><em>Autoregressive extrapolation — the model imagines forward purely from its own predictions.</em>
+</p>
+
 ### Configuration knobs (`config.yaml` / env)
 
 | Var | Default | Notes |
@@ -83,6 +103,7 @@ overlay/tests/validate_stage3_path_b.py  DroidDataset (+ GEAR variant) + AMD pat
 overlay/tests/_stage_{b,c}_patches.py    runtime memory/KV/VAE monkey-patches
 scripts/  download_checkpoints.sh  _hf_common.sh
 demos/    demo_smoke.sh  demo_openloop.sh  demo_videogen.sh
+assets/   README imagination gifs (anchor|imagined side-by-side + autoregressive)
 docs/     UPSTREAM_PIN.md  UPSTREAM_PIN.commit.txt
 ```
 
