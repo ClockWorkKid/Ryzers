@@ -1,0 +1,63 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# DreamZero-DROID (14B joint world-action model) WAM-direct port for AMD Strix
+# Halo (gfx1151). init_image omitted: ryzers defaults to the ROCm base
+# (rocm/pytorch torch 2.10.0) that already ships the gfx1151 ROCm torch stack.
+# Validated on both rocm7.2.2 and rocm7.14 (see RUNTIME_OPTIMIZATION.md).
+
+build_arguments:
+- "DREAMZERO_REF=ab790c198fbce33503358efbbd4187ce9a89adf3"
+
+gpu_support: true
+x11_display: false
+
+environment_variables:
+# --- ROCm / gfx1151 allocator + attention -------------------------------------
+- "PYTORCH_ROCM_ARCH=gfx1151"
+# expandable_segments MUST be False on rocm7.14 (True caps the GTT pool at
+# ~19.5 GiB there); False reaches the full ~47 GiB pool and is safe on 7.2.2 too.
+- "PYTORCH_HIP_ALLOC_CONF=expandable_segments:False"
+- "TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1"
+- "TORCH_BLAS_PREFER_HIPBLASLT=1"
+- "ATTENTION_BACKEND=torch"
+- "FLASH_ATTN_BACKEND=sdpa"
+- "ENABLE_FLASH_SDPA=1"
+# --- upstream compile paths off (ROCm) ----------------------------------------
+- "DREAMZERO_COMPILE_TEXT_ENCODER=0"
+- "DREAMZERO_COMPILE_IMAGE_ENCODER=0"
+- "DREAMZERO_COMPILE_VAE=0"
+- "DREAMZERO_COMPILE_DIT=0"
+- "TORCHDYNAMO_DISABLE=1"
+- "TORCH_COMPILE_DISABLE=1"
+# --- HF cache -----------------------------------------------------------------
+- "HF_HOME=/root/.cache/huggingface"
+- "HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub"
+- 'HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET:-1}'
+- 'HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER:-0}'
+- 'HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT:-60}'
+- "HF_HUB_DISABLE_TELEMETRY=1"
+- "TOKENIZERS_PARALLELISM=false"
+# --- weight / dataset mount points (see download_checkpoints.sh) --------------
+- "MODEL_PATH=/models/DreamZero-DROID"
+- "WAN21_DIR=/root/.cache/huggingface/Wan-AI/Wan2.1-I2V-14B-480P"
+- "DROID_DATASET_DIR=/models/DreamZero-DROID-Data"
+- "OUTPUT_DIR=/outputs"
+- "EMBODIMENT_TAG=OXE_DROID"
+# --- looping-fix / eval knobs (override from host: VAR=... ryzers run ...) -----
+- 'HF_TOKEN=${HF_TOKEN:-}'
+- 'EPISODES=${EPISODES:-}'
+- 'NUM_CHUNKS=${NUM_CHUNKS:-}'
+- 'DENOISE_STEPS=${DENOISE_STEPS:-}'
+- 'VIDEO_FPS=${VIDEO_FPS:-}'
+- 'STAGE_C=${STAGE_C:-}'
+- 'STREAMING_OVERLAP_DECODE=${STREAMING_OVERLAP_DECODE:-}'
+- 'STREAMING_OVERLAP_K=${STREAMING_OVERLAP_K:-}'
+- 'LONG_VIDEO_AUTOREGRESSIVE_DEBUG=${LONG_VIDEO_AUTOREGRESSIVE_DEBUG:-}'
+- 'NUM_SAMPLES=${NUM_SAMPLES:-}'
+- 'START_IDX=${START_IDX:-}'
+
+volume_mappings:
+- "$PWD/workspace/dreamzero/outputs:/outputs"
+- "$PWD/workspace/dreamzero/models:/models"
+- "$PWD/workspace/.cache/huggingface:/root/.cache/huggingface"
