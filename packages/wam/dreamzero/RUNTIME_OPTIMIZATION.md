@@ -1,4 +1,4 @@
-# DreamZero-DROID on Strix Halo (gfx1151) — runtime notes
+# DreamZero-DROID on Strix Halo (gfx1151) - runtime notes
 
 WAM-direct philosophy: upstream `/opt/dreamzero` stays pristine; every AMD-specific fix is a
 runtime monkey-patch in `overlay/` so the pinned commit and the paper's numerics are preserved.
@@ -9,7 +9,7 @@ the **memory strategy** and the **open-loop looping fix**.
 
 AMD Ryzen AI Max+ 395 (Strix Halo), `gfx1151`, single ROCm base (torch 2.10.0). CPU and GPU
 share one ~94 GiB unified pool; the GPU's usable GTT carveout is ~47 GiB. There is no discrete
-VRAM — every allocation competes with host RAM, so peak transient allocation matters more than
+VRAM - every allocation competes with host RAM, so peak transient allocation matters more than
 steady-state resident size.
 
 ## Attention: SDPA shim, no flash-attn build
@@ -21,7 +21,7 @@ aotriton fused attention on gfx1151. This removes the ROCm flash-attention sourc
 (`FLASH_ATTN_BACKEND=sdpa`, `ATTENTION_BACKEND=torch`). Smoke-tested by `test.py`
 (`flash_attn 0.0.0+sdpa-shim`).
 
-## Memory strategy (why 14B fits in ~42–43 GiB)
+## Memory strategy (why 14B fits in ~42-43 GiB)
 
 The naive `.to("cuda")` load and per-chunk VAE decode blow past the GTT pool. Fixes, all applied
 at runtime by `validate_stage3_path_b.py::apply_amd_patches` + `overlay/tests/_stage_b_patches.py`:
@@ -29,7 +29,7 @@ at runtime by `validate_stage3_path_b.py::apply_amd_patches` + `overlay/tests/_s
 | Fix | Effect |
 |---|---|
 | **Allocator: `expandable_segments:False`** | On **rocm7.14**, `True` silently caps torch at ~19.5 GiB of the GTT pool (load OOMs); `False` reaches the full ~47 GiB. On 7.2.2 either works; we standardize on `False`. |
-| **Tiled VAE encode + decode** (`vae.encode/decode -> tiled=True`) | Per-tile conv3d activation drops from ~4.35 GiB to ~0.1–0.5 GiB — the single biggest decode-time saver. |
+| **Tiled VAE encode + decode** (`vae.encode/decode -> tiled=True`) | Per-tile conv3d activation drops from ~4.35 GiB to ~0.1-0.5 GiB - the single biggest decode-time saver. |
 | **Text-encoder CPU offload** | UMT5-XXL (~11 GiB) is evicted to CPU after the prompt encode; frees headroom for the DiT forward. Re-materialized on demand. |
 | **Forced-CUDA `prepare_input`** | With the text encoder on CPU, upstream infers device from `next(parameters())` and ripples CPU tensors into a CUDA image encoder → device-mismatch. The patch pins inputs to CUDA. |
 | **`max_chunk_size` 4 → 2** | Bounds the video-latent working set per forward. |
@@ -39,7 +39,7 @@ Compile paths (`DREAMZERO_COMPILE_*`, dynamo) are disabled on ROCm.
 ## The open-loop "looping" artifact
 
 In open-loop rollout the predicted future-video looked like it *repeated / redid the task*.
-Root cause was three compounding effects — **none is a model bug**:
+Root cause was three compounding effects - **none is a model bug**:
 
 1. **Playback rate.** The model's predicted video is native **5 fps** (upstream saves at fps=5).
    Rendering it at the DROID dataset's 15 fps plays it ~3.2× too fast, so one reach reads as
@@ -53,7 +53,7 @@ Root cause was three compounding effects — **none is a model bug**:
 
 For honest long-horizon visualization beyond the grounded schedule, `LONG_VIDEO_AUTOREGRESSIVE_DEBUG=1`
 replays the schedule feeding each chunk's `video_pred` as the next chunk's latent (the model
-extends its own predicted stream) — `long_video_autoregressive_debug.mp4`.
+extends its own predicted stream) - `long_video_autoregressive_debug.mp4`.
 
 ### Evidence
 
@@ -75,7 +75,7 @@ looping fix on:
 | Host RAM peak | 46.8 GiB |
 | Load | 282.8 s | 
 | Total | 494.3 s |
-| Per-chunk infer | 17–32 s | 
+| Per-chunk infer | 17-32 s | 
 | Decode mode | `overlap` (all chunks) |
 
 ### DROID data layout note

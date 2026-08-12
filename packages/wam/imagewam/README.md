@@ -1,115 +1,139 @@
 ### ImageWAM
 
-This package runs [ImageWAM](https://github.com/yuyangalin/ImageWAM) — *"Do World Action
-Models Really Need Video Generation, or Just Image Editing?"* — on AMD Ryzen AI Max+ 395
-(Strix Halo, `gfx1151`) under ROCm 7.2.2. ImageWAM replaces video generation with a single
-**image-editing** step: the model "dreams" one edited future frame and conditions its action
-head on it. We port the **FLUX.2 [klein] ImageWAM** variant (Qwen3 text encoder + FLUX.2
-autoencoder + image-editing DiT + ActionDiT) — the recommended/strongest variant and the
-only one with released checkpoints. Direct PyTorch port: upstream code runs on the base
-image's ROCm torch; only the CUDA (cu118) torch pins are stripped and `transformers` is
-bumped to the FLUX.2-compatible `4.56.1`.
+This package runs [ImageWAM](https://github.com/yuyangalin/ImageWAM) on AMD Ryzen AI Max+
+395 (Strix Halo, gfx1151) under ROCm 7.14. ImageWAM is an image world-action model built on
+a FLUX.2 klein-base-4B stack (Qwen3-4B text encoder, FLUX.2 autoencoder, an image-editing
+DiT, and an action DiT). Instead of generating a future video it dreams a single edited
+future frame and conditions its action head on that frame. This is a direct PyTorch port:
+upstream runs on the base image's ROCm torch, only the CUDA torch pins are stripped and
+`transformers` is bumped to the FLUX.2-compatible `4.56.1`.
 
-It is a **slim policy/model layer that ships no simulator**, built on FastWAM's framework, so
-it reuses FastWAM's preprocessed LIBERO/RoboTwin datasets and the simulator packages' `Policy`
-seam. It composes on:
-
-- the plain ROCm base &rarr; non-sim demos (smoke / weights / open-loop / dream);
-- the `simulation/libero` base &rarr; closed-loop + interactive LIBERO;
-- the `simulation/robotwin` base &rarr; closed-loop RoboTwin 2.0.
+ImageWAM ships no simulator. It is a slim policy layer that reuses the shared LIBERO/RoboTwin
+datasets and attaches to the model-agnostic simulation bases through their `Policy` seam. It
+chains on `simulation/libero` and `simulation/robotwin` for closed-loop and interactive runs,
+or runs standalone on the plain base for the non-sim demos.
 
 ### Build
 
 ```sh
-# Standalone (non-sim demos + model sign-of-life):
-ryzers build imagewam --name imagewam
-ryzers run --name imagewam                 # test.py: ROCm torch + GPU + deps sign-of-life
-
-# Chain on a simulator base for closed-loop / interactive rollouts:
-ryzers build libero   imagewam --name imagewam-libero
-ryzers build robotwin imagewam --name imagewam-robotwin
+ryzers build simulation/libero   imagewam --name imagewam-libero    # chain on the LIBERO base: closed-loop + interactive
+ryzers build simulation/robotwin imagewam --name imagewam-robotwin  # chain on the RoboTwin base: closed-loop + interactive
+ryzers build imagewam --name imagewam                    # plain base: non-sim demos (open-loop / dream)
+ryzers run --name imagewam                               # test.py: ROCm torch + GPU + deps check
 ```
 
-Artifacts are written to `workspace/*/outputs`. **FLUX.2 base + AE weights are gated**
-(`black-forest-labs`) — set `HF_TOKEN` (with granted access) before fetching them.
+Artifacts are written to `workspace/*/outputs`. The FLUX.2 base and autoencoder are gated
+(`black-forest-labs`), so set `HF_TOKEN` (with granted access) before fetching them.
 
 ```sh
 HF_TOKEN=... ryzers run --name imagewam /ryzers/scripts/download_checkpoints.sh libero 4b
 ```
 
-This fetches the public ImageWAM checkpoint (`yuyangalin/ImageWAM-FLUX.2-4B-LIBERO`:
-`model.pt` + `dataset_stats.json` + `train_config.yaml`), the gated FLUX.2 klein-base-4B DiT
-+ FLUX.2-dev AE, and (on first model run) the Qwen3-4B text encoder.
+This fetches the public ImageWAM checkpoint (`model.pt`, `dataset_stats.json`,
+`train_config.yaml`), the gated FLUX.2 klein-base-4B DiT and autoencoder, and (on the first
+model run) the Qwen3-4B text encoder.
 
 ### Demos
 
-All demos are `ryzers run` wrappers over `scripts/` using in-container paths (`/models`,
-`/repos`, `/outputs`) and env overrides; they check for their prerequisites (weights / sim
-base / mounted dataset) and print a hint if missing. Outputs land in `workspace/*/outputs`.
-
 | Demo | Base | What it does |
 |---|---|---|
-| `demos/demo_smoke.sh` | plain | Load checkpoint, one `infer_action`; cold/steady latency + VRAM (`VISUALIZE_DREAM=1` also renders the dreamed frame). |
-| `demos/demo_openloop_libero.sh` | plain + LIBERO dataset | **P5** open-loop on real episodes (dataset replay, no sim): action MAE vs GT, AE PSNR, dreamed stills (`ol_metrics.json`, `ol_action_overlay.png`, `ol_dream_*.png`). |
-| `demos/demo_dreamvideo_openloop.sh` | plain + dataset | Continuous open-loop dream **video**: every frame is `[obs \| GT future \| dream]` (`DATASET=libero\|robotwin`; augmentation disabled for stable GT/obs columns). |
-| `demos/demo_latency.sh` | plain | **P8** per-module latency/computation profile (action vs dream path, fixed-vs-per-step split, param distribution, measured text-cache win) -> `p8_latency.json` + `.png`. Synthetic shapes, no dataset/sim. |
-| `demos/demo_closedloop_libero.sh` | `libero` | **P6** closed-loop LIBERO rollouts (MuJoCo, upstream evaluator) + `success_summary.json`. |
-| `demos/demo_closedloop_robotwin.sh` | `robotwin` | **P6b** closed-loop RoboTwin 2.0 rollouts (SAPIEN, upstream `eval_policy`). |
-| `demos/demo_dreamvideo_closedloop_libero.sh` | `libero` | Continuous **dream-vs-sim** video: actual sim frame every step (left) + re-dreamed future at each replan (right). |
-| `demos/demo_dreamvideo_closedloop_robotwin.sh` | `robotwin` | RoboTwin analogue of the dream-vs-sim video (3-cam compact layout). |
-| `demos/demo_interactive_libero{,_rt}.sh` | `libero` | **P7** interactive LIBERO server — synchronous and real-time. |
-| `demos/demo_interactive_robotwin{,_rt}.sh` | `robotwin` | **P7** interactive RoboTwin server — synchronous and real-time. |
+| `demos/demo_interactive_libero.sh` / `_rt.sh` | `libero` | Interactive LIBERO over HTTP (synchronous and real-time). |
+| `demos/demo_interactive_robotwin.sh` / `_rt.sh` | `robotwin` | Interactive RoboTwin over HTTP (synchronous and real-time). |
+| `demos/demo_closedloop_libero.sh` | `libero` | Closed-loop LIBERO rollouts (MuJoCo/EGL) + success summary. |
+| `demos/demo_closedloop_robotwin.sh` | `robotwin` | Closed-loop RoboTwin 2.0 rollouts (SAPIEN/Vulkan) + success summary. |
+| `demos/demo_dreamvideo_closedloop_libero.sh` | `libero` | Dream-vs-sim video: actual sim frame (left) + re-dreamed future at each replan (right). |
+| `demos/demo_dreamvideo_closedloop_robotwin.sh` | `robotwin` | RoboTwin dream-vs-sim video, 3-cam compact layout. |
+| `demos/demo_dreamvideo_openloop.sh` | plain | Open-loop dream video: every frame is `[obs \| GT future \| dream]`. |
+| `demos/demo_openloop_libero.sh` | plain | Replay LIBERO episodes, dreamed stills + predicted vs GT action chunks. |
 
-### Latency & optimization (P8)
+### Interactive and closed-loop LIBERO
 
-Profiled on **Radeon 8060S (Strix Halo `gfx1151`)**, bf16, `num_inference_steps=20`,
-`action_horizon=16`, input 224×448 (`scripts/profile_modules.py`; full writeup + chart on the
-laptop under `artifacts/latency/`). The deployment cost is the **action path**
-(`infer_action_flux2`); the **dream path** (`infer_video_flux2`) is image-world-model /
-visualization only and never runs during control.
+Drive the robot live in a browser, or run a batch rollout for a success rate. The interactive
+server streams the MuJoCo view over HTTP and prints its `http://localhost:PORT` URL; the
+`_rt` variant steps at wall-clock rate so planner latency is visible.
 
-| Path | Total / call | Dominant cost |
-|---|---:|---|
-| Action (control) | **1071 ms** | prefill KV 357 ms (33%) + action MoT loop 453 ms (42%, 22.7 ms/step) + Qwen3 195 ms (18%) |
-| Dream (viz only) | **10757 ms** | video DiT loop 10344 ms (**96%**, 517 ms/step) — **~10× the action path, ~23× per step** |
+```sh
+ryzers run --name imagewam-libero /ryzers/demos/demo_interactive_libero.sh   # live browser control
+ryzers run --name imagewam-libero /ryzers/demos/demo_closedloop_libero.sh    # batch rollouts + success summary
+```
 
-- **Fixed cost ≈ 605 ms (57%)** of the action path; the diffusion-step knob has limited
-  leverage (20→5 steps saves only ~33%) — the key ImageWAM finding: control never pays for the
-  3.88B video expert generation loop (84% of params), only its conditioning prefill.
-- **Text-embedding caching across replans: measured −18% (−193 ms → 878 ms).** The instruction
-  is fixed per episode; `infer_action_flux2` already accepts `context`/`context_mask`, so encode
-  Qwen3 once and reuse — a drop-in, exactly-lossless win.
-- **`torch.compile[default]` of the per-step MoT action forward: ~1.25× on the diffusion loop**
-  (max|Δ| ~1e-3 vs eager, bf16). The loop is compute/bandwidth-bound, not launch-bound —
-  HIP-graph capture gave 0.99× and `reduce-overhead` regressed, so inductor default is used.
-  Explored but not adopted: ParaDiGMS parallel-in-time sampling (near-lossless but only ~1.09×
-  here — the large video KV prefix makes per-step attention scale with batch). ROCm knob sweep
-  confirmed `TORCH_BLAS_PREFER_HIPBLASLT=0` + bf16 is optimal (hipBLASLt=1 regresses ~32%,
-  fp16 NaNs). Remaining levers: shrink the `Sv≈905` video prefix, weight-only fp8/int8 experts.
+<!-- TODO(release): regenerate on strix-halo; see docs/RELEASE_TODO.md -->
+<p align="center">
+  <img src="assets/interactive.png" width="480">
+  <br><em>PLACEHOLDER: interactive control over HTTP, pending regeneration on strix-halo.</em>
+</p>
 
-**Baked into the default route.** Both proven wins ship ON by default for every demo via
-`scripts/imagewam_opt.py` (patches the `ImageWAM`/`MoT` classes) — wired through
-`scripts/opt_launch.py` for the upstream closed-loop evaluators and interactive servers, and
-inline in the open-loop/dream scripts. No upstream files are modified. They fall back to eager on
-any error and are env-gated: `IMAGEWAM_OPT=0` (all off), `IMAGEWAM_TEXT_CACHE=0`,
-`IMAGEWAM_ACTION_COMPILE=0`. Note: `torch.compile` pays a one-time warm-up (~1–2 min) on the first
-action step of a process; set `IMAGEWAM_ACTION_COMPILE=0` if that stall is undesirable (e.g. a
-short real-time demo). `demos/demo_latency.sh` is intentionally left unwrapped so its A/B
-(naive vs text-cached) stays a clean measurement.
+<!-- TODO(release): regenerate on strix-halo; see docs/RELEASE_TODO.md -->
+<p align="center">
+  <img src="assets/closedloop_libero.png" width="420">
+  <br><em>PLACEHOLDER: closed-loop LIBERO rollouts, pending regeneration on strix-halo.</em>
+</p>
 
-### Status
+### Interactive and closed-loop RoboTwin 2.0
 
-Port complete on branch `wam-imagewam` (off `benchmark`). Milestones: P0 scoping ✓ ·
-P1 scaffold ✓ · P2 import smoke ✓ · P3 full-model ROCm smoke ✓ · P4 module validation ✓ ·
-P5 open-loop + dream ✓ · P6 closed-loop (LIBERO + RoboTwin 2.0) ✓ · P7 interactive
-(sync + real-time) ✓ · P8 latency/opt analysis ✓.
+RoboTwin 2.0 runs under the SAPIEN Vulkan renderer.
+
+```sh
+ryzers run --name imagewam-robotwin /ryzers/demos/demo_interactive_robotwin.sh   # live browser control
+TASKS="click_bell beat_block_hammer" NUM_EPISODES=10 \
+  ryzers run --name imagewam-robotwin /ryzers/demos/demo_closedloop_robotwin.sh  # batch rollouts + success summary
+```
+
+<!-- TODO(release): regenerate on strix-halo; see docs/RELEASE_TODO.md -->
+<p align="center">
+  <img src="assets/closedloop_robotwin.png" width="420">
+  <br><em>PLACEHOLDER: closed-loop RoboTwin 2.0 rollouts, pending regeneration on strix-halo.</em>
+</p>
+
+### Dreamed-frame imagination
+
+ImageWAM's world model is a single image-editing step: from the current observation it dreams
+one edited future frame (ground truth left, dreamed frame right) rather than a full video. The
+dream path is for visualization only and never runs during control.
+
+```sh
+DATASET=libero DATA_DIR=/libero_data/libero_object_no_noops_lerobot \
+  ryzers run --name imagewam -v /host/libero:/libero_data /ryzers/demos/demo_dreamvideo_openloop.sh
+```
+
+<!-- TODO(release): regenerate on strix-halo; see docs/RELEASE_TODO.md -->
+<p align="center">
+  <img src="assets/dream_frame.png" width="600">
+  <br><em>PLACEHOLDER: ground truth vs the single dreamed future frame, pending regeneration on strix-halo.</em>
+</p>
+
+### Open-loop replay
+
+Replay real LIBERO episodes with no simulator: feed real observations, proprio, and the task
+prompt to the model, then compare predicted action chunks against the dataset ground truth and
+render a few dreamed stills.
+
+```sh
+ryzers run --name imagewam -v /host/libero:/libero_data /ryzers/demos/demo_openloop_libero.sh
+```
+
+<!-- TODO(release): regenerate on strix-halo; see docs/RELEASE_TODO.md -->
+<p align="center">
+  <img src="assets/openloop_libero.png" width="600">
+  <br><em>PLACEHOLDER: ground truth vs predicted action chunks, pending regeneration on strix-halo.</em>
+</p>
+
+### Useful knobs
+
+- Non-sim: `DATASET=libero|robotwin` (open-loop / dream), `DATA_DIR` / `LIBERO_SUITE_DIR` for the mounted dataset, `NUM_STEPS`, `SEED`, `TAG`.
+- Open-loop: `OL_NUM_SAMPLES`, `OL_NUM_DREAMS`.
+- Closed-loop LIBERO: `SUITE`, `NUM_TASKS`, `NUM_TRIALS`, `ACTION_HORIZON`, `REPLAN_STEPS`.
+- Closed-loop RoboTwin: `TASKS`, `TASK_CONFIG`, `NUM_EPISODES`, `NUM_INFERENCE_STEPS`.
+- Interactive: `PORT`, `SUITE`, `TASK_ID`, `SEED`, `REPLAN_STEPS`, `RT_HZ` (real-time variant).
+- Weights: `FLUX2_VARIANT=4b|9b` (LIBERO ships 4b and 9b, RoboTwin 4b only), `CKPT_PATH`, `DATASET_STATS_PATH`.
+- `HF_TOKEN` for the gated FLUX.2 base and autoencoder downloads.
 
 ### References
 
 - Upstream: https://github.com/yuyangalin/ImageWAM (pinned in `docs/UPSTREAM_PIN.commit.txt`)
-- Backbone: https://github.com/black-forest-labs/flux2 (pinned)
+- Backbone: https://github.com/black-forest-labs/flux2 (pinned in `docs/UPSTREAM_PIN.commit.txt`)
 - Models: https://huggingface.co/collections/yuyangalin/imagewam
-- Datasets (shared with FastWAM): https://huggingface.co/datasets/yuanty/LIBERO-fastwam · https://huggingface.co/datasets/yuanty/robotwin2.0-fastwam
+- Datasets (shared with FastWAM): https://huggingface.co/datasets/yuanty/LIBERO-fastwam, https://huggingface.co/datasets/yuanty/robotwin2.0-fastwam
 
 Copyright (C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 SPDX-License-Identifier: MIT

@@ -5,7 +5,7 @@
 # (gfx1151). This is a slim policy image: it installs only the FastWAM model on the
 # base image's ROCm torch (upstream CUDA torch pins are stripped so the base ROCm torch
 # is preserved) plus a LIBERO Policy adapter. It ships NO simulator. It composes on:
-#   * the plain ROCm base  -> non-sim demos (smoke / latency / open-loop / videogen)
+#   * the plain ROCm base  -> non-sim demos (open-loop / videogen)
 #   * simulation/libero    -> closed-loop + interactive LIBERO (ryzers build libero fastwam)
 #   * simulation/robotwin  -> closed-loop + interactive RoboTwin (via its own adapter)
 # Installing under a constraint pinning the base's torch+numpy lets the exact same layer

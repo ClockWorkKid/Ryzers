@@ -1,4 +1,4 @@
-# FlowWAM Ryzers Port — Plan & Status
+# FlowWAM Ryzers Port - Plan & Status
 
 Target: AMD Ryzen AI Max+ 395 "Strix Halo" (gfx1151), ROCm 7.2.2, `rocm/pytorch` torch base.
 Base branch: `origin/benchmark`. Work branch: `wam-flowwam`. Authoritative code + weights live on
@@ -27,11 +27,11 @@ AMD-internal access details are committed (rule 9).
   validated on ROCm/Vulkan (460 ms/frame). `open_loop_eval.py` (reuses upstream
   `RoboTwinRolloutInferenceDataset` + `rollout_generate`): single-chunk anchored to the real first
   frame reproduces GT scene layout; two-column GT|dream (rule 2.b) + flow strip + 10-episode 3-panel
-  `[REAL|FLOW|DREAM]`. Timing: VAE warmup ~525 s on ep1, then ~43–68 s/episode; **decode-dominant**.
+  `[REAL|FLOW|DREAM]`. Timing: VAE warmup ~525 s on ep1, then ~43-68 s/episode; **decode-dominant**.
   Constraint: input W,H must be divisible by 32 (dual-stream latent parity). Long-horizon
   autoregressive rollout (`wm_autoregressive_eval.py`, **world-model stress test, NOT closed-loop**):
-  first chunk faithful (20–48 dB), stepwise drift at each self-anchored hand-off (see PORT_SUMMARY §5).
-- [~] **P6** **Closed-loop action policy — STAGED (authored; pending GPU validation).** Correction:
+  first chunk faithful (20-48 dB), stepwise drift at each self-anchored hand-off (see PORT_SUMMARY §5).
+- [~] **P6** **Closed-loop action policy - STAGED (authored; pending GPU validation).** Correction:
   FlowWAM's genuine closed loop is the *flow-ACTION* pipeline in the full `FlowWAM` repo (IDM action
   expert), **not** an autoregressive world-model rollout. Implemented as the upstream flow-action
   server + `robotwin_policy` on our robotwin base via RoboTwin's stock `eval_policy.py` (no sim
@@ -44,17 +44,17 @@ AMD-internal access details are committed (rule 9).
   test + approval.
 
 ## Key decisions
-1. **Reuse the FastWAM ROCm playbook wholesale** — shared Wan2.2-TI2V-5B / DiffSynth backbone
+1. **Reuse the FastWAM ROCm playbook wholesale** - shared Wan2.2-TI2V-5B / DiffSynth backbone
    (rule 2.1: patch only for ROCm).
-2. **Base on `simulation/robotwin`** — FlowWAM requires SAPIEN robot rendering + RoboTwin
+2. **Base on `simulation/robotwin`** - FlowWAM requires SAPIEN robot rendering + RoboTwin
    embodiments; the base already has SAPIEN/Vulkan headless on gfx1151 (rule 0.4: layer, don't
    rebuild a base).
-3. **Two upstream repos, one package** — `FlowWAM_WorldArena` (open-loop world model) +
+3. **Two upstream repos, one package** - `FlowWAM_WorldArena` (open-loop world model) +
    `FlowWAM` (closed-loop action policy). The closed-loop server uses its repo's `diffsynth` via
    runtime `PYTHONPATH` to avoid clobbering the validated open-loop install.
-4. **Defer the SeedVR2 refiner** — apex is CUDA-only; stage-1/world-model gen is the deliverable.
+4. **Defer the SeedVR2 refiner** - apex is CUDA-only; stage-1/world-model gen is the deliverable.
 5. **bf16 as the default baseline knob**; diffusion-step count out of scope.
 
 ## Corrected open question (was Q1: flow → action)
 Resolved: the world-model repo emits video+flow only, but the full `FlowWAM` repo ships the IDM
-**action expert** + a RoboTwin policy server/client — that is the genuine closed loop, now staged.
+**action expert** + a RoboTwin policy server/client - that is the genuine closed loop, now staged.

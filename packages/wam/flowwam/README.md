@@ -1,79 +1,121 @@
 ### FlowWAM
 
-This package runs **FlowWAM** — a Wan2.2-TI2V-5B **dual-stream world-action model** that uses
-**dense optical flow as a unified action representation** — on AMD Ryzen AI Max+ 395 (Strix Halo,
-`gfx1151`) under ROCm 7.2.2. FlowWAM jointly generates a future RGB video and a flow field
-(dual-stream Wan DiT), extracts RAFT optical flow through a reversible flow codec, and renders
-robot-only frames from RoboTwin 2.0 embodiments via SAPIEN.
+This package runs [FlowWAM](https://github.com/YixiangChen515/FlowWAM_WorldArena) on AMD Ryzen AI
+Max+ 395 (Strix Halo, gfx1151) under ROCm 7.14. FlowWAM is a Wan2.2-TI2V-5B dual-stream
+world-action model that uses dense optical flow as a unified action representation: one shared
+dual-stream Wan DiT jointly generates a future RGB video and a flow field, RAFT plus a reversible
+flow codec make that flow the action carrier, and an IDM action expert turns generated flow into
+14-D robot actions. This is a direct PyTorch port: upstream (a trimmed DiffSynth) runs on the base
+image's ROCm torch and only the base-owned CUDA torch, numpy, and sapien pins are stripped, so
+DiffSynth attention falls back to torch SDPA and the SeedVR2 refiner (apex, CUDA only) is deferred.
 
-**Two evaluation modes (both merged into this package):**
+FlowWAM ships no simulator. It is a slim model layer that renders robot-only frames from RoboTwin
+2.0 embodiments through SAPIEN, so it requires the SAPIEN Vulkan renderer and composes on top of
+the `simulation/robotwin` sim base for every demo.
 
-| Mode | What it is | Upstream repo | Checkpoint | Driver |
-|------|-----------|---------------|-----------|--------|
-| **Open-loop (world model)** | Predict future video given first frame + action-derived flow; score vs GT video. **No controller.** | [`FlowWAM_WorldArena`](https://github.com/YixiangChen515/FlowWAM_WorldArena) | `flowwam_worldarena_stage1.safetensors` | `scripts/open_loop_eval.py`; long-horizon rollout stress-test in `scripts/wm_autoregressive_eval.py` |
-| **Closed-loop (action policy)** | **Genuine control loop**: model → IDM action expert → RoboTwin `env.step`, replanning each chunk; score task success. | [`FlowWAM`](https://github.com/YixiangChen515/FlowWAM) | `flowwam_robotwin.safetensors` + `..._action_norm_stats.npz` | ws server + `robotwin_policy` via RoboTwin's `eval_policy.py` (`demos/demo_closedloop_robotwin.sh`) |
-
-> Note: `wm_autoregressive_eval.py` chains the world model on its own frames — this is an
-> autoregressive *world-model* rollout, **not** closed-loop control (no action feedback). Only the
-> closed-loop mode above drives the robot.
-
-Direct PyTorch port: upstream (a trimmed DiffSynth) runs on the base image's ROCm torch. Only
-the base-owned CUDA/torch/numpy/sapien pins are stripped; **no** flash-attn/apex/cuBLAS are
-installed — DiffSynth's `flash_attention()` falls back to torch SDPA on ROCm, and apex is only
-needed by the (deferred) SeedVR2 refiner.
-
-It is a **slim model layer that ships no simulator**. Because it requires SAPIEN robot rendering
-+ RoboTwin embodiments, it composes on the **`simulation/robotwin`** base:
+### Build
 
 ```sh
-# Chain on the RoboTwin 2.0 sim base (SAPIEN/Vulkan headless on gfx1151):
-ryzers build robotwin flowwam --name flowwam-robotwin
-ryzers run   --name flowwam-robotwin           # test.py: ROCm torch + Wan dual-stream env smoke
+ryzers build simulation/robotwin flowwam --name flowwam-robotwin    # chain the model on the RoboTwin sim base
+ryzers run   --name flowwam-robotwin                     # test.py: ROCm torch + GPU + Wan dual-stream deps
 ```
 
-### Weights
-
-Everything is fetched from the original HF repos on demand (never re-hosted). The Wan2.2-TI2V-5B
-base (~12 GB) + FlowWAM stage-1 checkpoint + RoboTwin embodiments:
+Artifacts are written to `workspace/flowwam/outputs`. Set `HF_TOKEN` for faster or gated downloads.
+The ~12 GB Wan2.2-TI2V-5B base, FlowWAM checkpoints, and RoboTwin embodiments are fetched from the
+original HF repos on the first model run, never re-hosted.
 
 ```sh
-ryzers run --name flowwam-robotwin /ryzers/scripts/download_checkpoints.sh all
-# or piecewise: base | stage1 (world model) | robotwin (action policy) | embodiments
+ryzers run --name flowwam-robotwin /ryzers/scripts/download_checkpoints.sh all   # base | stage1 | robotwin | embodiments
 ```
-
-For gated repos / the RoboTwin embodiments dataset, set `HF_TOKEN`.
 
 ### Demos
 
+| Demo | Base | What it does |
+|---|---|---|
+| `demos/demo_closedloop_robotwin.sh` | `robotwin` | Closed-loop RoboTwin 2.0 rollouts (SAPIEN/Vulkan) + success rate. |
+| `scripts/wm_autoregressive_eval.py` | `robotwin` | Imagine future video from the first observation, GT-vs-dream clips. |
+| `scripts/open_loop_eval.py` | `robotwin` | Open-loop world-model prediction vs GT video, PSNR over the horizon. |
+
+### Closed-loop RoboTwin 2.0
+
+The genuine closed loop drives RoboTwin 2.0 under the SAPIEN Vulkan renderer: the dual-stream DiT
+generates flow-conditioned video, the IDM action expert turns the generated flow into a 14-D action
+chunk over a websocket server, and the robot replans every `EXECUTE_WINDOW` steps from a fresh
+observation. Warm steady-state replan is about 81 s (video 25 steps, action 50 steps), with the
+video DiT forward at about 91% of a replan.
+
 ```sh
-ryzers run --name flowwam-robotwin /ryzers/demos/demo_smoke.sh                 # env sign-of-life
-ryzers run --name flowwam-robotwin /ryzers/demos/demo_closedloop_robotwin.sh   # genuine closed loop
-# open-loop world-model eval: scripts/open_loop_eval.py (+ wm_autoregressive_eval.py long-horizon)
+TASK=beat_block_hammer NUM_EPISODES=5 \
+  ryzers run --name flowwam-robotwin /ryzers/demos/demo_closedloop_robotwin.sh
 ```
 
-Artifacts are written under `workspace/flowwam/outputs`. The SeedVR2 refiner is intentionally
-out of this image (its apex dependency is CUDA-only); the deliverable is stage-1 video gen.
+Six aloha-agilex tasks, `demo_clean`, seed 0, 5 episodes each: 26/30 (86.7%) overall
+(beat_block_hammer 5/5, place_empty_cup 5/5, stack_blocks_two 5/5, click_bell 4/5, handover_block
+4/5, lift_pot 3/5).
 
-### Runtime optimizations (gfx1151, default-on)
+<p align="center">
+  <img src="assets/closedloop_robotwin_beat_block_hammer.gif" width="200">
+  <img src="assets/closedloop_robotwin_click_bell.gif" width="200">
+  <img src="assets/closedloop_robotwin_place_empty_cup.gif" width="200">
+  <img src="assets/closedloop_robotwin_stack_blocks_two.gif" width="200">
+  <br><em>Closed-loop RoboTwin rollouts: beat block hammer, click bell, place empty cup, stack blocks.</em>
+</p>
 
-The closed-loop demo routes the flow-action server through `scripts/opt_launch.py`
-(`PYTHON=/ryzers/scripts/opt_python.sh`), which arms two measured, **quality-preserving** speedups
-on the dominant (~91%) dual-stream video-DiT stage **without editing upstream**:
+### World-model video imagination
 
-- **Cross-attn K/V + text-embedding cache** — the instruction is fixed per episode, so text-context
-  K/V are cached across the 25 diffusion steps (**bit-exact**, 1.019×).
-- **`torch.compile[default]` of the dual-stream block fn** — fuses the fp32 norm/modulate/FFN tail
-  (near-lossless, cos 0.9999). One-time ~80 s Inductor compile on the first replan.
+The dual-stream world model imagines future video from the first observation and the action-derived
+flow (ground truth left, dream right). A single 33-frame chunk anchored to the real first frame
+reproduces the scene faithfully; chained autoregressively (each chunk anchored on the previous
+dream) the video drifts over the horizon. Generation is decode-dominant at about 43 to 68 s/episode
+after a one-time ~525 s VAE warmup.
 
-Stacked ≈ **1.042×** on the video-DiT loop, closed-loop success preserved. Env kill-switches
-(default ON): `FLOWWAM_OPT=0` (all) / `FLOWWAM_CACHE=0` / `FLOWWAM_COMPILE=0`; any error falls back
-to eager. The lossy flow-downsample lever (`FLOW_DS`, ~1.6× but drops success) is **not** default —
-experimental only. Full analysis: `RUNTIME_OPTIMIZATION.md`.
+```sh
+ryzers run --name flowwam-robotwin python /ryzers/scripts/wm_autoregressive_eval.py
+```
+
+<p align="center">
+  <img src="assets/wm_autoregressive_51.gif" width="380">
+  <img src="assets/wm_autoregressive_199.gif" width="380">
+  <br><em>Ground truth (left) vs autoregressive dream (right), episodes 51 and 199.</em>
+</p>
+
+### Open-loop world-model rollout
+
+Dream-vs-real PSNR over the autoregressive timeline: the first real-anchored chunk is faithful
+(about 20 to 48 dB) and quality degrades stepwise at each chunk hand-off, since consistency depends
+on re-anchoring to real frames, which the closed loop does every replan.
+
+```sh
+MAX_ROLLOUTS=3 ryzers run --name flowwam-robotwin python /ryzers/scripts/wm_autoregressive_eval.py
+```
+
+<p align="center">
+  <img src="assets/wm_psnr_ep51.png" width="380">
+  <img src="assets/wm_psnr_ep69.png" width="380">
+  <br><em>PSNR vs frame (dashed = chunk boundary): episode 51 (2 chunks) and episode 69 (3 chunks).</em>
+</p>
+
+### Useful knobs
+
+- Closed-loop RoboTwin: `TASK`, `TASK_CONFIG`, `NUM_EPISODES`, `SEED`, `EXECUTE_WINDOW`, `VIDEO_INFERENCE_STEPS`, `ACTION_INFERENCE_STEPS`, `PORT`.
+- World-model / open-loop: `NUM_OUTPUT_FRAMES`, `NUM_INFERENCE_STEPS`, `SIGMA_SHIFT`, `MAX_ROLLOUTS`, `EPISODES`, `MAX_EPISODES`, `CAMERA`, `FLOW_METHOD`, `TEST_DATASET_DIR`.
+- Optimization: `FLOWWAM_OPT=0` (disable all), `FLOWWAM_CACHE=0`, `FLOWWAM_COMPILE=0`; opt-in fast preset `FLOW_GRID=18x16`.
+- `HF_TOKEN` for faster or gated downloads.
+
+### Optimization
+
+The closed-loop route ships two quality-preserving speedups default-on: a bit-exact cross-attention
+K/V plus text-embedding cache and a `torch.compile` of the dual-stream block fn, together about
+1.04x on the video-DiT loop (91% of a replan) with closed-loop success preserved. An opt-in fast
+preset (`FLOW_GRID=18x16`, mild flow-stream asymmetry) adds about 1.28x end-to-end. See
+`RUNTIME_OPTIMIZATION.md` for the full study, including the levers that did not help on this hardware.
 
 ### References
 
-- Open-loop (world model): https://github.com/YixiangChen515/FlowWAM_WorldArena (pinned in `docs/UPSTREAM_PIN.commit.txt`)
-- Closed-loop (action policy): https://github.com/YixiangChen515/FlowWAM
-- Paper: *FlowWAM: Optical Flow as a Unified Action Representation for World Action Models* (arXiv 2607.13017)
+- Upstream world model: https://github.com/YixiangChen515/FlowWAM_WorldArena (pinned in `docs/UPSTREAM_PIN.commit.txt`)
+- Upstream action policy: https://github.com/YixiangChen515/FlowWAM
+- Model: https://huggingface.co/YixiangChen/FlowWAM
+- Datasets: https://huggingface.co/datasets/TianxingChen/RoboTwin2.0 (RoboTwin 2.0 embodiments), WorldArena RoboTwin 2.0 test split
 
-Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+SPDX-License-Identifier: MIT

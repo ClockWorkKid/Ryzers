@@ -1,0 +1,107 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+### ryzers build options
+
+# Pinned to the ROCm 7.14 base (rocm/pytorch torch 2.10.0), the current standard for
+# these ports; it ships the ROCm+torch base this package needs.
+init_image: rocm/pytorch:rocm7.14_ubuntu24.04_py3.12_pytorch_release_2.10.0
+
+# Pin the upstream VLA-JEPA source this package builds against.
+build_arguments:
+- "VLAJEPA_COMMIT=ec8c70f6e155e2377bbd4d787004c14179c00c7c"
+
+### ryzers run options
+
+gpu_support: true
+x11_display: false
+
+# Weights + HF assets are NOT baked into the image; they download once into the
+# persistent /root/.cache/huggingface volume and are reused across runs.
+# Artifacts (plots, videos) land under /outputs.
+environment_variables:
+- "HF_HOME=/root/.cache/huggingface"
+# HF download backend: single-stream + Xet off for reliable anonymous downloads.
+# Override for speed where permits/auth allow: HF_HUB_ENABLE_HF_TRANSFER=1 ryzers run ...
+- 'HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET:-1}'
+- 'HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER:-0}'
+- 'HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT:-60}'
+- "HF_HUB_DISABLE_TELEMETRY=1"
+- "TOKENIZERS_PARALLELISM=false"
+# Headless MuJoCo (used by the LIBERO closed-loop path when chained on simulation/libero).
+- "MUJOCO_GL=egl"
+- "PYOPENGL_PLATFORM=egl"
+# ROCm perf levers for gfx1151.
+- "TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1"
+- "TORCH_BLAS_PREFER_HIPBLASLT=0"
+- "OUT_DIR=/outputs"
+# Model selection + per-demo knobs (override from host: VAR=... ryzers run /ryzers/demo_*.sh).
+# VLA-JEPA HF checkpoint repo + which sub-checkpoint to load for the smoke.
+- 'MODEL_REPO=${MODEL_REPO:-ginwind/VLA-JEPA}'
+- 'CKPT_REL=${CKPT_REL:-LIBERO/checkpoints/VLA-JEPA-LIBERO.pt}'
+# Base encoders the checkpoint config is repointed to (HF ids).
+- 'BASE_VLM=${BASE_VLM:-Qwen/Qwen3-VL-2B-Instruct}'
+- 'BASE_ENCODER=${BASE_ENCODER:-facebook/vjepa2-vitl-fpc64-256}'
+- 'DTYPE=${DTYPE:-bfloat16}'
+# Runtime inference opts (bf16 head + skip lm_head + cross-attn KV cache + conv->matmul) are ON by
+# default across all sim paths (~2.3-3.3x faster predict, near-lossless). Set to 1 for the stock path.
+- 'VLAJEPA_NO_OPT=${VLAJEPA_NO_OPT:-}'
+- 'SEED=${SEED:-}'
+- 'EPISODE=${EPISODE:-}'
+- 'SUITE=${SUITE:-}'
+- 'TASK_ID=${TASK_ID:-}'
+- 'HF_TOKEN=${HF_TOKEN:-}'
+# Open-loop replay (demo_openloop.sh) + latent imagination (demo_imagine.sh) knobs.
+- 'GT_REPO=${GT_REPO:-yifengzhu-hf/LIBERO-datasets}'
+- 'GT_FILE=${GT_FILE:-}'
+- 'GT_LOCAL=${GT_LOCAL:-}'
+- 'INSTRUCTION=${INSTRUCTION:-}'
+- 'UNNORM_KEY=${UNNORM_KEY:-}'
+- 'REPLAN=${REPLAN:-}'
+- 'MAX_STEPS=${MAX_STEPS:-}'
+- 'FLIP180=${FLIP180:-1}'
+- 'T0=${T0:-0}'
+- 'FETCH_ONLY=${FETCH_ONLY:-}'
+# Closed-loop / interactive LIBERO knobs (only used when chained on the
+# simulation/libero base: ryzers build libero vlajepa).
+- 'NUM_TASKS=${NUM_TASKS:-}'
+- 'NUM_TRIALS=${NUM_TRIALS:-}'
+- 'REPLAN_STEPS=${REPLAN_STEPS:-}'
+- 'NUM_STEPS_WAIT=${NUM_STEPS_WAIT:-}'
+- 'IMAGE_SIZE=${IMAGE_SIZE:-}'
+- 'SAVE_VIDEO=${SAVE_VIDEO:-}'
+- 'NUM_VIDEOS=${NUM_VIDEOS:-}'
+- 'TAG=${TAG:-}'
+- 'PORT=${PORT:-}'
+- 'RT_HZ=${RT_HZ:-}'
+- 'POLICY_FACTORY=${POLICY_FACTORY:-}'
+# LIBERO-Plus robustness knobs (only used when chained on the simulation/libero-plus base:
+# ryzers build libero-plus vlajepa). CATEGORY is one of the 7 perturbation dimensions,
+# DIFFICULTY is 1-5, MAX_TASKS caps/samples the selection.
+- 'CATEGORY=${CATEGORY:-}'
+- 'DIFFICULTY=${DIFFICULTY:-}'
+- 'MAX_TASKS=${MAX_TASKS:-}'
+- 'SAMPLE=${SAMPLE:-}'
+- 'LIBEROPLUS_CLASSIFICATION=${LIBEROPLUS_CLASSIFICATION:-}'
+# SimplerEnv (WidowX / BridgeData v2) closed-loop knobs (only used when chained on the
+# simulation/simplerenv base: ryzers build simulation/simplerenv vlajepa). SAPIEN offscreen
+# Vulkan on gfx1151; RENDER_BACKEND auto-detects the GPU PCI address when empty. Assets land
+# under the persistent HF-cache mount (MS_ASSET_DIR) so they are reused across runs.
+- 'SAPIEN_HEADLESS=${SAPIEN_HEADLESS:-1}'
+- 'VK_ICD_FILENAMES=${VK_ICD_FILENAMES:-/usr/share/vulkan/icd.d/radeon_icd.json}'
+- 'RENDER_BACKEND=${RENDER_BACKEND:-}'
+- 'MS_ASSET_DIR=${MS_ASSET_DIR:-/root/.cache/huggingface/maniskill_assets}'
+- 'TASKS=${TASKS:-}'
+- 'GRIPPER_OPEN_SIGN=${GRIPPER_OPEN_SIGN:-}'
+- 'ENSEMBLE_HORIZON=${ENSEMBLE_HORIZON:-}'
+- 'ENSEMBLE_ALPHA=${ENSEMBLE_ALPHA:-}'
+- 'USE_DDIM=${USE_DDIM:-}'
+- 'NUM_DDIM_STEPS=${NUM_DDIM_STEPS:-}'
+
+volume_mappings:
+- "$PWD/workspace/vlajepa/outputs:/outputs"
+- "$PWD/workspace/vlajepa/models:/models"
+- "$PWD/workspace/.cache/huggingface:/root/.cache/huggingface"
+
+# --network=host, --ipc=host, and --shm-size 16G are provided by the Ryzer default
+# run flags. Repeating them here makes Docker reject the run.

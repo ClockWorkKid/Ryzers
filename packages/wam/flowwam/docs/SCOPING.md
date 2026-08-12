@@ -1,9 +1,9 @@
-# FlowWAM — Upstream Scoping (Ryzers port, Strix Halo / gfx1151, ROCm 7.2.2)
+# FlowWAM - Upstream Scoping (Ryzers port, Strix Halo / gfx1151, ROCm 7.2.2)
 
 > **Correction (post-P5):** this doc originally scoped only the world-model repo
 > `FlowWAM_WorldArena` and left "flow → action for closed loop" as open Q1. That question is now
 > resolved: the **full `FlowWAM` repo** (https://github.com/YixiangChen515/FlowWAM) ships the **IDM
-> action expert** + a RoboTwin flow-action policy server/client — that is the genuine closed loop
+> action expert** + a RoboTwin flow-action policy server/client - that is the genuine closed loop
 > (now staged; see `PORT_SUMMARY.md` §6 and `PLAN.md` P6). The autoregressive world-model rollout is
 > *not* closed-loop. The package therefore uses **two upstream repos**: `FlowWAM_WorldArena`
 > (open-loop world model) and `FlowWAM` (closed-loop action policy).
@@ -17,7 +17,7 @@ FlowWAM is a **video-diffusion World-Action Model** whose central idea is to use
 flow as a unified action representation**. Instead of regressing joint/EE actions with a separate
 action head (FastWAM) or predicting a single edited goal image (ImageWAM), FlowWAM:
 1. generates a **future RGB video** conditioned on a reference frame + language instruction, then
-2. extracts **RAFT optical flow** between frames, encodes it with a **reversible flow codec** — flow
+2. extracts **RAFT optical flow** between frames, encodes it with a **reversible flow codec** - flow
    is the action carrier,
 3. renders a **robot-only frame** from RoboTwin2.0 embodiment URDFs via **SAPIEN** to disentangle
    robot motion from scene, and
@@ -26,7 +26,7 @@ action head (FastWAM) or predicting a single edited goal image (ImageWAM), FlowW
 Per rule 2.b, open-loop viz shows the reference/GT frame(s) on the **left** and the generated/dreamed
 video on the **right**; the **flow field** is the FlowWAM-specific first-class visualization target.
 
-## 2. Model stack (all Wan-lineage — big reuse from FastWAM)
+## 2. Model stack (all Wan-lineage - big reuse from FastWAM)
 | Component | Source | Role |
 |---|---|---|
 | **Wan2.2-TI2V-5B** | `Wan-AI/Wan2.2-TI2V-5B` | dual-stream world-model DiT backbone |
@@ -34,7 +34,7 @@ video on the **right**; the **flow field** is the FlowWAM-specific first-class v
 | **Wan VAE** | bundled w/ Wan2.2-TI2V-5B | video latent enc/dec |
 | **FlowWAM world-model ckpt** | `YixiangChen/FlowWAM` `flowwam_worldarena_stage1.safetensors` | open-loop world model |
 | **FlowWAM action ckpt** | `YixiangChen/FlowWAM` `flowwam_robotwin.safetensors` + action-norm stats | closed-loop policy (IDM) |
-| **SeedVR2-3B refiner** | `ByteDance-Seed/SeedVR2-3B` | stage-2 refinement — **deferred** (apex CUDA-only) |
+| **SeedVR2-3B refiner** | `ByteDance-Seed/SeedVR2-3B` | stage-2 refinement - **deferred** (apex CUDA-only) |
 | **RAFT** | torchvision | optical-flow estimator |
 | **RoboTwin2.0 embodiments** | `TianxingChen/RoboTwin2.0` `embodiments.zip` | SAPIEN robot URDFs |
 
@@ -43,7 +43,7 @@ builds on.
 
 ## 3. Datasets / simulators
 - **WorldArena / RoboTwin2.0** is the open-loop benchmark; `packages/simulation/robotwin` (SAPIEN +
-  Vulkan headless on gfx1151) is the base — FlowWAM's SAPIEN robot renderer + embodiments reuse it.
+  Vulkan headless on gfx1151) is the base - FlowWAM's SAPIEN robot renderer + embodiments reuse it.
 - Open-loop test split: `WorldArena_Robotwin2.0/test_dataset` (1000 episodes). Closed-loop:
   standard RoboTwin 2.0 `aloha-agilex` tasks (50-task suite).
 
@@ -57,7 +57,7 @@ builds on.
 - **sapien** → Vulkan renderer, already working on gfx1151 via the RoboTwin base; reuse it.
 
 ## 5. Compliance (rules 8, 9)
-- All weights downloaded by scripts/Dockerfile at build/run time — **never re-hosted** in the PR.
+- All weights downloaded by scripts/Dockerfile at build/run time - **never re-hosted** in the PR.
 - DiffSynth/SeedVR are vendored **in upstream** (Apache-2.0); we clone upstream at pinned commits in
   the Dockerfile, not vendor them ourselves.
 - **No AMD-internal access details in any committed file.**

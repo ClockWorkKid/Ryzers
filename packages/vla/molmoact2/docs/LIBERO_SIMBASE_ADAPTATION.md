@@ -1,4 +1,4 @@
-# MolmoAct2 → shared `simulation/libero` base — adaptation design
+# MolmoAct2 → shared `simulation/libero` base - adaptation design
 
 > Status: **design + adapter skeleton on the spin-off branch `benchmark-molmoact2-libero`.**
 > Not yet merged into `benchmark`. The dependency reconciliation and closed-loop parity
@@ -12,7 +12,7 @@ allenai/lerobot eval stack** (`lerobot-eval --policy.type=molmoact2 --env.type=l
 `lerobot.scripts.lerobot_eval.rollout`), bundling its own LIBERO env, interactive servers,
 and action-dump patch. This task reworks it to consume the shared **`simulation/libero`**
 base through the model-agnostic `sim_libero.Policy` seam + `POLICY_FACTORY`, mirroring
-`wam/fastwam`'s adapter — so every model runs closed-loop/interactive LIBERO on one
+`wam/fastwam`'s adapter - so every model runs closed-loop/interactive LIBERO on one
 canonical harness.
 
 ## The seam (target contract)
@@ -21,12 +21,12 @@ canonical harness.
 that owns the env, rendering, streaming and the episode loop. A model plugs in by:
 
 1. Implementing `sim_libero.policy.Policy`:
-   - `predict_action_chunk(obs, instruction) -> np.ndarray [T, 7]` where the 7-D action is
+  - `predict_action_chunk(obs, instruction) -> np.ndarray [T, 7]` where the 7-D action is
      LIBERO OSC-delta `[dx, dy, dz, droll, dpitch, dyaw, gripper]`. `obs` is the **raw
      robosuite obs dict** returned by `scene.reset()` / `env.step()` (keys:
      `agentview_image`, `robot0_eye_in_hand_image`, `robot0_eef_pos`,
      `robot0_eef_quat`/`..._axis_angle`, `robot0_gripper_qpos`, ...).
-   - optional `reset(instruction)` (clear the per-episode depth/spatial-plan cache),
+  - optional `reset(instruction)` (clear the per-episode depth/spatial-plan cache),
      `replan_steps`, `num_steps_wait`, `name`.
 2. Exposing `build_policy() -> Policy`, selected at runtime by
    `POLICY_FACTORY=molmoact2_libero_policy:build_policy`.
@@ -35,7 +35,7 @@ The harness's `sim_libero.rollout.run_episode` settles `num_steps_wait` no-ops, 
 `predict_action_chunk(obs, instruction)` → execute the first `replan_steps` actions →
 re-predict. Interactive/RT servers call the same seam.
 
-## The crux — two Python stacks that must be reconciled
+## The crux - two Python stacks that must be reconciled
 
 | | shared `simulation/libero` base | MolmoAct2 LIBERO (current) |
 |---|---|---|
@@ -62,7 +62,7 @@ needs to load.
    preprocessor expects (`observation.images.image`, `observation.images.wrist_image`,
    `observation.state` composition + dim, `task`) and the **image orientation** (the
    lerobot LIBERO env applies its own rotation; `sim_libero.get_libero_image` rotates 180°
-   to match FastWAM training — confirm MolmoAct2's expected orientation).
+   to match FastWAM training - confirm MolmoAct2's expected orientation).
 3. **Action decode**: confirm the postprocessor returns LIBERO OSC-delta `[7]` directly
    (`norm_tag=libero` un-normalization) and how to pull a **full chunk** `[T,7]`
    (`predict_action_chunk` vs. draining the policy's receding-horizon action queue).
@@ -78,16 +78,16 @@ noted for `simulation/simplerenv`. Heavier, but robust to the transformers/numpy
 
 ## Package changes (this branch)
 
-- `adapters/molmoact2_libero_policy.py` — the `sim_libero.Policy` bridge (skeleton here;
+- `adapters/molmoact2_libero_policy.py` - the `sim_libero.Policy` bridge (skeleton here;
   model-API specifics flagged `# VALIDATE-ON-BOX`).
-- `config.yaml` — add the `sim_libero` knobs (`SUITE`, `TASK_ID`, `SEED`, `PORT`,
+- `config.yaml` - add the `sim_libero` knobs (`SUITE`, `TASK_ID`, `SEED`, `PORT`,
   `VIEW_RES`, `VIDEO_RES`, `RENDER_RES`, `MAX_STEPS`, `RT_HZ`, `REPLAN_STEPS`,
   `NUM_STEPS_WAIT`, `POLICY_FACTORY`), mirroring `wam/fastwam`.
 - `demos/demo_closedloop_libero.sh`, `demos/demo_interactive_libero.sh`,
-  `demos/demo_interactive_libero_rt.sh` — chain form
+  `demos/demo_interactive_libero_rt.sh` - chain form
   (`ryzers build simulation/libero molmoact2`), set `POLICY_FACTORY`, run the base harness
   demos (`/ryzers/demos/demo_*` from the base).
-- Dockerfile — a chain-aware branch: when built on the `simulation/libero` base
+- Dockerfile - a chain-aware branch: when built on the `simulation/libero` base
   (`/opt/LIBERO` present), install the lerobot **policy** deps (no `[libero]` extra) and put
   `adapters/` on `PYTHONPATH`. The existing DROID/interactive (non-LIBERO) stack stays.
 - The bundled LIBERO harness (`scripts/interactive_server*.py`, `libero_action_plot.py`,

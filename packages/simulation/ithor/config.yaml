@@ -1,7 +1,8 @@
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-# init_image omitted: ryzers defaults to the ROCm 7.2.2 base
+# ROCm 7.14 base (rocm/pytorch torch 2.10.0), the current standard for these ports.
+init_image: rocm/pytorch:rocm7.14_ubuntu24.04_py3.12_pytorch_release_2.10.0
 # (rocm/pytorch torch 2.10.0), which already ships the ROCm torch stack. This is a model-agnostic
 # AI2-THOR (iTHOR) simulator base; chain a policy/model on top with
 #   ryzers build ithor <model>

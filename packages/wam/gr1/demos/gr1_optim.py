@@ -28,7 +28,7 @@ Notes:
    entries only catch the fp32 case where no flash kernel exists.
  * bf16 autocast additionally accelerates every matmul (resampler, GPT-2, linears) while keeping
    reductions/softmax/layernorm in fp32; fp16 (10 mantissa bits vs bf16's 7) better preserves
-   closed-loop task success on gfx1151 (see OPTIMIZATIONS.md).
+   closed-loop task success on gfx1151 (see RUNTIME_OPTIMIZATION.md).
 """
 import contextlib
 import os

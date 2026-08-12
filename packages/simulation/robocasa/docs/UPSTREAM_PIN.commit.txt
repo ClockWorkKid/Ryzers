@@ -1,0 +1,16 @@
+RoboCasa (kitchen manipulation tasks, scenes, and the kitchen-asset downloader)
+https://github.com/robocasa/robocasa
+commit 756598a5be52e052339bb2d957426e39015c2afb  (main, pinned)
+  installed --no-deps (its setup.py hard-pins numpy==1.23.3); real runtime deps added
+  explicitly in the Dockerfile. mujoco is pinned to 3.2.6 (robocasa asserts this at import).
+
+robosuite (RoboSuite v1.5 MuJoCo backend that RoboCasa builds on)
+https://github.com/ARISE-Initiative/robosuite
+commit 232ce7d4a6ed89c949a9aba024a05c8c32fdd08b  (master, pinned; RoboCasa v0.2 requires master)
+
+Both repos are cloned at these commits (code only) and installed editable. The ~10GB kitchen
+assets are third-party and fetched at RUNTIME by scripts/setup_robocasa.sh into the mounted
+volume (robocasa.scripts.download_kitchen_assets), never baked into the image (rules 3 & 8).
+
+The WAM/VLA policies that drive this sim (e.g. X-WAM) live in their own packages and chain on
+top of this base at runtime via POLICY_FACTORY.

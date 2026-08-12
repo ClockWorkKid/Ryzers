@@ -1,4 +1,4 @@
-# X-WAM Ryzer — Implementation Plan
+# X-WAM Ryzer - Implementation Plan
 
 Target: a stable `packages/wam/xwam/` Ryzer running X-WAM on Strix Halo (`gfx1151`,
 ROCm 7.2.2), plus a new `packages/simulation/robocasa/` base, culminating in a
@@ -15,17 +15,17 @@ model loading + one forward pass end-to-end**, not submodules assembled separate
 > mirroring the FastWAM port decision. Flagged to the dev; proceed on confirmation.
 
 Heavy steps (Docker build, multi-GB weight/dataset downloads, closed-loop runs) start only
-after plan sign-off. Machine is shared — check `docker ps` and wait for a free GPU (rule 10).
+after plan sign-off. Machine is shared - check `docker ps` and wait for a free GPU (rule 10).
 
 ---
 
-## Phase 0 — Workspace & version control (this session)
+## Phase 0 - Workspace & version control (this session)
 - [x] Scope upstream X-WAM + Ryzers benchmark + the remote Strix Halo target (see `docs/SCOPING.md`).
 - [ ] Remote `~/Ryzers-benchmark`: branch **`wam-XWAM`** off `benchmark`. No push until dev approval (rule 0.3).
 - [ ] Clone X-WAM upstream (pinned `72cfb86`, `--recurse-submodules`) to remote `~/X-WAM-src` for reference.
 - [ ] Scaffold `packages/wam/xwam/` + `packages/simulation/robocasa/` skeletons; laptop mirror of docs/skeleton.
 
-## Phase 1 — Build image + full-model smoke (ROCm 7.2.2)
+## Phase 1 - Build image + full-model smoke (ROCm 7.2.2)
 Goal: image builds; the **full X-WAM model** loads on ROCm torch and runs one forward pass.
 - Dockerfile `FROM ${BASE_IMAGE}` (rocm/pytorch, torch 2.10+rocm7.2.2). Keep base ROCm torch;
   strip upstream CUDA torch pins; drop hard `flash-attn` (route attention to SDPA/AOTriton on gfx1151).
@@ -34,7 +34,7 @@ Goal: image builds; the **full X-WAM model** loads on ROCm torch and runs one fo
 - Build-time guard `assert torch.version.hip`; `test.py` = ROCm torch + GPU + deps sign-of-life.
 - **Gate 1:** image builds, ROCm torch confirmed, GPU visible, X-WAM imports + constructs.
 
-## Phase 2 — Forward pass with released weights
+## Phase 2 - Forward pass with released weights
 - `scripts/download_checkpoints.sh`: fetch `X-WAM-checkpoints` (`wan22_5b`, `pretrained`,
   `robocasa_sft`, `robotwin_sft`) + UMT5-XXL/VAE base into the mounted HF cache (rule 8).
 - `scripts/model_smoke.py`: load `robotwin_sft` (or `robocasa_sft`), run one full forward from a
@@ -43,14 +43,14 @@ Goal: image builds; the **full X-WAM model** loads on ROCm torch and runs one fo
   within the same run for parity confidence.
 - **Gate 2:** full forward runs on real weights without error; latency/VRAM captured.
 
-## Phase 3 — Open-loop evaluation (X-WAM datasets)
+## Phase 3 - Open-loop evaluation (X-WAM datasets)
 - `scripts/download_datasets.sh`: a few `X-WAM-RoboCasa` / `X-WAM-RoboTwin` episodes.
 - `scripts/openloop_replay.py`: replay GT observations, predict action chunks; overlay GT vs
   predicted actions on one plot (rule 2.a), report per-dim normalized MAE. Small plots →
   `/outputs` → laptop `artifacts/xwam/`. Optional video-imagination (GT left, imagined right, rule 2.b).
 - **Gate 3:** predicted actions track GT within reasonable error on a handful of episodes.
 
-## Phase 4 — Closed-loop simulation
+## Phase 4 - Closed-loop simulation
 ### 4a. RoboTwin 2.0 (reuse existing `simulation/robotwin` base)
 - Add `adapters/xwam_robotwin_policy.py` (Policy seam / `POLICY_FACTORY`) + an X-WAM
   `deploy_policy` bridging to RoboTwin's `eval_policy.py`, reusing FastWAM/AHA-WAM RoboTwin wiring.
@@ -68,12 +68,12 @@ Goal: image builds; the **full X-WAM model** loads on ROCm torch and runs one fo
   real-time variants included. Both sims: sync + RT SMOKE PASS through the X-WAM `Policy` seam
   (RoboTwin via `robotwin_xwam` EE adapter + additive `action_type` harness plumb).
 
-## Phase 5 — Stabilize, document, PR
+## Phase 5 - Stabilize, document, PR
 - `docs/`: `UPSTREAM_PIN.commit.txt`, `RYZER_REPRODUCTION`, `PORT_SUMMARY`, `RUNTIME_OPTIMIZATION.md`.
 - Cleanup; no AMD-internal details in tracked files (rule 9); assets via runtime download (rule 8).
 - Dev full manual repro test → push `wam-XWAM` to fork (rule 0.3 approval) → PR to `AMDResearch/Ryzers`.
 
-## Post-milestone (research — efficiency)
+## Post-milestone (research - efficiency)
 - Characterize runtime: per-part latency (UMT5 / VAE / video DiT / depth branch / action head),
   attention backend cost, denoise-step scaling on gfx1151.
 - **Asynchronous Noise Sampling (ANS)** is the headline lever: sweep `action_denoise_steps` vs
@@ -97,10 +97,10 @@ Goal: image builds; the **full X-WAM model** loads on ROCm torch and runs one fo
 - Branch name **`wam-XWAM`** off `benchmark` OK, or prefer a differently-named spinoff?
 
 ## Risks / watch-items
-- The Strix Halo target is shared — check `docker ps` before builds; wait for a free GPU (rule 10).
-- The remote SSH connection can drop — if lost, ask the dev to re-establish it, then resume.
+- The Strix Halo target is shared - check `docker ps` before builds; wait for a free GPU (rule 10).
+- The remote SSH connection can drop - if lost, ask the dev to re-establish it, then resume.
 - 5B video DiT + depth branch footprint on unified memory; bf16 inference.
 - flash-attn 2.8.3 has no gfx1151 build → must fall back to SDPA/AOTriton; validate at smoke time.
 - RoboCasa/robosuite is a fresh port: MuJoCo/EGL headless render on gfx1151, asset download, numpy pinning.
 - decord/ffmpeg mp4 (RGB + depth) decode on the base image; verify wheels.
-- Upstream `pip install` may pull CUDA torch — must constrain to preserve ROCm torch.
+- Upstream `pip install` may pull CUDA torch - must constrain to preserve ROCm torch.

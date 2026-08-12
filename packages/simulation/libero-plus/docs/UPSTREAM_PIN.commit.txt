@@ -1,0 +1,6 @@
+sylvestf/LIBERO-plus   (LIBERO-Plus: perturbed, harder LIBERO robustness benchmark; MuJoCo/EGL + robosuite, drop-in replacement for the libero package)
+https://github.com/sylvestf/LIBERO-plus
+commit: not pinned. The Dockerfile clones with --depth 1 (default-branch HEAD) at build time, so the exact commit is not recorded here. Pin the built commit on strix-halo before the upstream release.
+
+Perturbation asset pack (objects, textures, scenes) is fetched at build time from the upstream open-source HuggingFace dataset, never re-hosted in this repo:
+https://huggingface.co/datasets/Sylvest/LIBERO-plus

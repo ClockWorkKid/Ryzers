@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: MIT
 #
 # DreamZero-DROID (14B joint world-action model) WAM-direct port for AMD Strix
-# Halo (gfx1151). init_image omitted: ryzers defaults to the ROCm base
-# (rocm/pytorch torch 2.10.0) that already ships the gfx1151 ROCm torch stack.
-# Validated on both rocm7.2.2 and rocm7.14 (see RUNTIME_OPTIMIZATION.md).
+# Halo (gfx1151). Pinned to the ROCm 7.14 base (rocm/pytorch torch 2.10.0), the current
+# standard for these ports; it already ships the gfx1151 ROCm torch stack. Validated on
+# both rocm7.2.2 and rocm7.14 (see RUNTIME_OPTIMIZATION.md).
+init_image: rocm/pytorch:rocm7.14_ubuntu24.04_py3.12_pytorch_release_2.10.0
 
 build_arguments:
 - "DREAMZERO_REF=ab790c198fbce33503358efbbd4187ce9a89adf3"

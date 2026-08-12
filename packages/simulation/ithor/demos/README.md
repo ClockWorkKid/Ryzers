@@ -6,7 +6,7 @@ Vulkan (ai2thor `platform=CloudRendering`) on gfx1151. Select a model at runtime
 
 ## Sign-of-life / gate
 ```sh
-ryzers build ithor --name sim-ithor
+ryzers build simulation/ithor --name sim-ithor
 ryzers run --name sim-ithor            # test.py: headless Vulkan render spike (the GATE)
 ```
 

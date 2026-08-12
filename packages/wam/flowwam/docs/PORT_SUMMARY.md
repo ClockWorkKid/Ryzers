@@ -1,4 +1,4 @@
-# FlowWAM — Ryzers Port Summary (adoption · benchmark · tuning)
+# FlowWAM - Ryzers Port Summary (adoption · benchmark · tuning)
 
 **Target:** AMD Ryzen AI Max+ 395 "Strix Halo" (`gfx1151`), ROCm 7.2.2, `torch 2.10.0+rocm7.2.2`
 (hip 7.2.53211), Radeon 8060S iGPU, single GPU. Composed on the `simulation/robotwin` base
@@ -16,7 +16,7 @@ actions. It ships **two evaluation modes**, both merged into this single package
 | **Open-loop (world model)** | predict future video from first frame + action-derived flow; score vs GT video. **No controller.** | `FlowWAM_WorldArena` | `flowwam_worldarena_stage1.safetensors` | `scripts/open_loop_eval.py` |
 | **Closed-loop (action policy)** | **genuine control:** model → IDM action expert → RoboTwin `env.step`, replan each chunk; score task success. | `FlowWAM` | `flowwam_robotwin.safetensors` + action-norm stats | ws server + `robotwin_policy` via RoboTwin `eval_policy.py` (`demos/demo_closedloop_robotwin.sh`) |
 
-## 2. Port / adoption (ROCm playbook) — no source patches needed
+## 2. Port / adoption (ROCm playbook) - no source patches needed
 - Reuse the FastWAM Wan/DiffSynth ROCm playbook wholesale: strip base-owned CUDA/torch/numpy/sapien
   pins from `requirements.txt`, hold the base ROCm torch via `PIP_CONSTRAINT`; DiffSynth
   `flash_attention()` falls back to **torch SDPA** on ROCm; **apex + the SeedVR2 refiner are skipped**
@@ -25,9 +25,9 @@ actions. It ships **two evaluation modes**, both merged into this single package
   into the image; the closed-loop server uses the full FlowWAM repo's `diffsynth` via runtime
   `PYTHONPATH` so the validated open-loop install is untouched (rules 0.4 / 2.1).
 - Image: `flowwam-robotwin` layered on `simulation/robotwin` (weights fetched at run time, never
-  re-hosted — rules 8/9).
+  re-hosted - rules 8/9).
 
-## 3. Per-module validation (rule 2) — all PASS on gfx1151
+## 3. Per-module validation (rule 2) - all PASS on gfx1151
 - **Model load:** 11.39B params (text_encoder 5.68B + DiT 5.00B + VAE 0.705B + flow_stream 1.19M),
   built in ~13 s; DiT dim=3072, ffn=14336, 30 layers, 24 heads, in/out=48, patch [1,2,2].
 - **UMT5-XXL text enc** → context `(1,512,4096)` bf16, finite.
@@ -36,19 +36,19 @@ actions. It ships **two evaluation modes**, both merged into this single package
 - **RAFT + reversible flow codec** → RAFT flow correct; codec encode→decode **MAE 0.067 px** (near-lossless).
 - **SAPIEN robot-only renderer** → 460 ms/frame on ROCm/Vulkan (dual-arm aloha-agilex qpos replay).
 
-## 4. Open-loop world-model eval (WorldArena RoboTwin 2.0) — DONE
+## 4. Open-loop world-model eval (WorldArena RoboTwin 2.0) - DONE
 - 384×288, 15 denoise steps, single 33-frame chunk anchored to the **real** first frame → faithful
   reproduction of scene layout (objects, table, arm). Two-column `GT | dream` (rule 2.b) + flow strip
   + 10-episode 3-panel `[REAL OBS | FLOW (action) | DREAM]` in `artifacts/flowwam/{openloop,threepanel}`.
-- **Timing:** one-time VAE warmup ~525 s (first-call ROCm kernel compile), then ~43–68 s/episode.
+- **Timing:** one-time VAE warmup ~525 s (first-call ROCm kernel compile), then ~43-68 s/episode.
   VAE **decode is the dominant ROCm cost**.
 - **Constraint found:** dual-stream needs rgb+flow latents with identical spatial dims; VAE latent =
   W,H/16 diverges when a latent dim is odd → **input W,H must be divisible by 32** (the runner snaps).
 
-## 5. Long-horizon autoregressive world-model rollout (stress test — *not* closed-loop)
+## 5. Long-horizon autoregressive world-model rollout (stress test - *not* closed-loop)
 `scripts/wm_autoregressive_eval.py` chains the world model on its own frames (last dreamed frame
 anchors the next chunk). This is an **open-loop-family** stress test with **no controller / no action
-feedback** — it is *not* closed-loop control. Process-isolated run (PSNR, dream vs GT):
+feedback** - it is *not* closed-loop control. Process-isolated run (PSNR, dream vs GT):
 
 | Episode | chunks | PSNR first→last | mean |
 |---|---|---|---|
@@ -58,14 +58,14 @@ feedback** — it is *not* closed-loop control. Process-isolated run (PSNR, drea
 | 199 | 3 | 22 → 20 | 14.2 |
 | 7 | 1 | 8.7 → 6.7 | 8.1 |
 
-**Finding:** the first chunk (≤33 frames, real-anchored) is faithful (20–48 dB); quality degrades
+**Finding:** the first chunk (≤33 frames, real-anchored) is faithful (20-48 dB); quality degrades
 stepwise at each autoregressive hand-off. Consistency is a function of **re-anchoring to real
-frames** — which is exactly what the genuine closed loop does (§6), so closed-loop is expected to
+frames** - which is exactly what the genuine closed loop does (§6), so closed-loop is expected to
 avoid this drift. Divergence curves per episode in `artifacts/flowwam_wm_autoregressive/`.
 
-## 6. Closed-loop action policy (RoboTwin) — STAGED (authored, pending GPU validation)
+## 6. Closed-loop action policy (RoboTwin) - STAGED (authored, pending GPU validation)
 Genuine control loop using the **upstream FlowWAM flow-action pipeline**, adapted for ROCm on our
-robotwin base (RoboTwin's stock `script/eval_policy.py`; **no sim source edits** — policy symlinked
+robotwin base (RoboTwin's stock `script/eval_policy.py`; **no sim source edits** - policy symlinked
 as `policy/flowwam`):
 
 ```
@@ -86,9 +86,8 @@ RAFT-vs-lighter flow estimator profiling. Diffusion-step count is out of scope.
 
 ## 8. Reproduce
 ```sh
-ryzers build robotwin flowwam --name flowwam-robotwin
+ryzers build simulation/robotwin flowwam --name flowwam-robotwin
 ryzers run --name flowwam-robotwin /ryzers/scripts/download_checkpoints.sh all   # base|stage1|robotwin|embodiments
-ryzers run --name flowwam-robotwin /ryzers/demos/demo_smoke.sh                    # env sign-of-life
 ryzers run --name flowwam-robotwin /ryzers/demos/demo_closedloop_robotwin.sh      # closed loop (needs GPU)
 # open-loop world-model eval: scripts/open_loop_eval.py ; long-horizon: scripts/wm_autoregressive_eval.py
 ```

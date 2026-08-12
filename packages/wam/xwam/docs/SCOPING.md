@@ -1,15 +1,15 @@
-# X-WAM Ryzer — Scoping Notes
+# X-WAM Ryzer - Scoping Notes
 
 Scope snapshot captured during initial project scoping. Laptop-side reference only
 (backup + docs; no weights/images live here per workspace rule 3). The shared laptop
-root also mirrors the FastWAM port — X-WAM material is namespaced under `docs/xwam/`,
+root also mirrors the FastWAM port - X-WAM material is namespaced under `docs/xwam/`,
 `artifacts/xwam/`, and the `wam-XWAM` branch of the `Ryzers-benchmark` clone.
 
 ## 1. Goal
 
 Port **X-WAM** (unified 4D world-action model) into an AMD **Ryzer** package that runs
 on the **Strix Halo** mini-PC (Ryzen AI Max+ 395, `gfx1151`, ROCm 7.2.2) as a **direct
-PyTorch → ROCm port** — the upstream code, run on ROCm torch instead of CUDA torch, with
+PyTorch → ROCm port** - the upstream code, run on ROCm torch instead of CUDA torch, with
 no module-by-module re-implementation. It is added as a slim model package on the
 `benchmark` branch (models are consumers of shared `simulation/*` bases). Milestone chain:
 
@@ -34,10 +34,10 @@ in one architecture: high-fidelity video gen, 3D spatial reconstruction, policy 
 efficient action execution. Pretrained on 5,800+ hours of robot data.
 
 ### Key features (and why they matter for us)
-- **Unified 4D modeling** — video + 3D (depth) + policy in one framework.
-- **Lightweight depth adaptation** — replicates the final DiT blocks as an interleaved depth
+- **Unified 4D modeling** - video + 3D (depth) + policy in one framework.
+- **Lightweight depth adaptation** - replicates the final DiT blocks as an interleaved depth
   branch (`num_extra_layers: 10`), adding spatial modeling without doubling sequence length.
-- **Asynchronous Noise Sampling (ANS)** — decouples denoise budgets: **few** action denoise
+- **Asynchronous Noise Sampling (ANS)** - decouples denoise budgets: **few** action denoise
   steps (`action_denoise_steps: 10`) for real-time execution, **full** steps (`sample_steps: 50`)
   for high-fidelity video. *This is the headline efficiency lever and our primary optimization target.*
 
@@ -74,19 +74,19 @@ third_party/{RoboTwin, robocasa, robosuite}             # git submodules
 `num_frames`, `instructions`, `observations[<cam>]{type static|dynamic, rgb_path, depth_path,
 start, end, fps}`, `proprios{left/right_ee_pos, _ee_rotm, _gripper_pos}`, `actions{… , raw_actions?}`.
 Cameras: `robot0_agentview_left`, `robot0_agentview_right`, `robot0_eye_in_hand`.
-**RoboCasa uses `raw_actions`** (raw controller commands) — prefer over the decomposed action fields.
+**RoboCasa uses `raw_actions`** (raw controller commands) - prefer over the decomposed action fields.
 
 ### Evaluation architecture (broker → server → client)
-- `policy_broker.py` — middleware dispatching client requests to servers (`--frontend_port`, `--backend_port`).
-- `policy_server.py` — loads model + inference on a GPU (`--exp_path`, `--wan_checkpoint_dir`,
+- `policy_broker.py` - middleware dispatching client requests to servers (`--frontend_port`, `--backend_port`).
+- `policy_server.py` - loads model + inference on a GPU (`--exp_path`, `--wan_checkpoint_dir`,
   `--denoise_steps 50`, `--action_denoise_steps 10`). Multiple servers can share the broker.
-- `robocasa_client.py` (24 kitchen tasks, idx 0–23) / `robotwin_client.py` (50 tasks,
-  `--task_name --task_config demo_randomized`) — run the sim, send obs to the broker.
+- `robocasa_client.py` (24 kitchen tasks, idx 0-23) / `robotwin_client.py` (50 tasks,
+  `--task_name --task_config demo_randomized`) - run the sim, send obs to the broker.
 This socket seam maps cleanly onto our interactive/closed-loop demo pattern.
 
-### Upstream env (CUDA — must be re-based to ROCm)
+### Upstream env (CUDA - must be re-based to ROCm)
 Python ≥3.10; `torch>=2.4` (tested 2.8.0+cu129); `numpy<1.26` (1.23.5); `diffusers>=0.31`
-(0.38); `transformers 4.49–4.51.3`; **`flash-attn 2.8.3`**; `decord`, `imageio[ffmpeg]`,
+(0.38); `transformers 4.49-4.51.3`; **`flash-attn 2.8.3`**; `decord`, `imageio[ffmpeg]`,
 `deepspeed>=0.16`, `lightning`, `omegaconf`, `einops`, `h5py`, `tyro`, `easydict`.
 ROCm concerns: strip CUDA torch pins (keep base ROCm torch); flash-attn unavailable on
 gfx1151 → route attention through SDPA / AOTriton (`modules/attention.py` likely has a fallback);
@@ -102,23 +102,23 @@ RoboCasa (24 kitchen tasks) **79.2%** avg SR; RoboTwin 2.0 clean **89.8%** / ran
 - **Benchmark-branch model** = slim policy/model layer, ships **no simulator**; composes on the
   plain ROCm base (non-sim demos) and on shared `simulation/*` bases via a `Policy` adapter
   selected by `POLICY_FACTORY`. Simulators are the single source of truth; a model must not fork one.
-- Structural template: **`packages/wam/fastwam/`** — Dockerfile (`ARG BASE_IMAGE` / `FROM ${BASE_IMAGE}`,
+- Structural template: **`packages/wam/fastwam/`** - Dockerfile (`ARG BASE_IMAGE` / `FROM ${BASE_IMAGE}`,
   git clone at pinned commit, `strip_cuda_torch.py`, `PIP_CONSTRAINT` pinning base torch+numpy,
   build-time `assert torch.version.hip`), `config.yaml` (COMMIT build arg + env knobs + volume
   mappings), `adapters/*_policy.py`, `scripts/{download_checkpoints,download_datasets,model_smoke,
   openloop_replay,strip_cuda_torch}.{sh,py}`, `demos/demo_*.sh`, `docs/UPSTREAM_PIN.commit.txt`.
-- Build/run: `ryzers build xwam --name xwam`; chain on sim base: `ryzers build robotwin xwam`,
-  `ryzers build robocasa xwam`. Weights/datasets fetched at runtime into a mounted HF cache (rule 8).
+- Build/run: `ryzers build xwam --name xwam`; chain on sim base: `ryzers build simulation/robotwin xwam`,
+  `ryzers build simulation/robocasa xwam`. Weights/datasets fetched at runtime into a mounted HF cache (rule 8).
 
 ### Existing simulation bases (benchmark branch)
 `simulation/{libero, libero-plus, robotwin, simplerenv}`. X-WAM needs **`simulation/robotwin`**
-(exists — RoboTwin 2.0, SAPIEN/Vulkan) and **`simulation/robocasa`** (NEW — robosuite/MuJoCo
+(exists - RoboTwin 2.0, SAPIEN/Vulkan) and **`simulation/robocasa`** (NEW - robosuite/MuJoCo
 kitchen benchmark; the "RoboCase" in the task brief = RoboCasa).
 
 ## 4. Remote target state (as scoped, this session)
 
 - Target: a Strix Halo (Ryzen AI Max+ 395, `gfx1151`) machine, ROCm 7.2.2, ample free disk.
-  Shared machine — GPU checked free before builds (rule 10).
+  Shared machine - GPU checked free before builds (rule 10).
 - A `Ryzers-benchmark` fork clone tracks branch `benchmark` (origin `ClockWorkKid/Ryzers`,
   upstream `AMDResearch/Ryzers`); it already carries `packages/wam/{fastwam,ahawam}` and
   `packages/simulation/{libero,libero-plus,robotwin,simplerenv}`.

@@ -6,7 +6,7 @@ NOT a runnable model - it shows the shape of a real adapter for a model develope
 own ryzer (e.g. on another Strix Halo box) that chains on `simulation/libero-plus`. Replace
 the `import` and the two TODO blocks with your actual package's inference calls; the rest is
 the LIBERO Policy contract and is identical for every model. The runnable VLA-JEPA adapter +
-closed-loop robustness runner live in `vla/vlajepa/adapters/` and `vla/vlajepa/scripts/`.
+closed-loop robustness runner live in `wam/vlajepa/adapters/` and `wam/vlajepa/scripts/`.
 
 Build + run (from the VLA-JEPA package):
     ryzers build libero-plus vla-jepa --name vla-jepa-libero-plus

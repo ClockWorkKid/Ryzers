@@ -7,7 +7,7 @@
 # optimization recipe transfers directly.
 #
 # Deps: upstream's requirements.txt/dockerfile pin `diffusers==0.34.0`, `transformers>=4.46.2`,
-# `torch>=2.1.2` (no hard CUDA pin, unlike VERA). We keep the base ROCm torch (2.10.0/rocm7.2.2)
+# `torch>=2.1.2` (no hard CUDA pin, unlike VERA). We keep the base ROCm torch (2.10.0/rocm7.14)
 # and install a curated INFERENCE subset of the deps under a torch/torchvision PIP_CONSTRAINT so
 # nothing swaps in a CUDA wheel or breaks the torch ABI. Training-only heavy deps (gradio, comet_ml,
 # tensorboard, datasets, albumentations, deepspeed) are intentionally omitted — inference is scope.

@@ -1,7 +1,7 @@
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
-# Model-agnostic AI2-THOR (iTHOR) simulator base image for AMD Strix Halo (gfx1151, ROCm 7.2.2).
+# Model-agnostic AI2-THOR (iTHOR) simulator base image for AMD Strix Halo (gfx1151, ROCm 7.14).
 # Ships ONLY the simulator (ai2thor + its Unity CloudRendering build + headless Vulkan runtime) and
 # a small model-agnostic harness (sim_ithor): a ThorEnv ObjectNav wrapper, a Policy seam, and a
 # generic rollout / sanity runner. No policy or model weights: layer a video/VLA model (AVDC, ...)

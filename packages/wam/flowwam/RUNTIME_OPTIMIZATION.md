@@ -1,4 +1,4 @@
-# FlowWAM — runtime optimization (P8)
+# FlowWAM - runtime optimization (P8)
 
 Inference-time latency analysis + optimization of the FlowWAM closed-loop flow-action path on
 **AMD Strix Halo `gfx1151`, ROCm 7.2.2, bf16** (image `flowwam-robotwin`). Companion to the
@@ -6,14 +6,14 @@ cross-model `docs/RUNTIME_OPTIMIZATION_PLAYBOOK.md`; section refs (§) point the
 measured against the real loaded weights, isolated from the sim/websocket (rule 2).
 
 ## TL;DR
-- **Bottleneck class: video-DiT-bound** — the *opposite* of FastWAM. FlowWAM fully denoises a
+- **Bottleneck class: video-DiT-bound** - the *opposite* of FastWAM. FlowWAM fully denoises a
   dual-stream (RGB+flow) video every replan, so the **video DiT forward is 91.6% of a replan**; the
   action expert (the thing that outputs actions) is only 6.9%.
 - **bf16 is already the standard route** for every sub-model (DiT/VAE/T5/FlowStream/IDM).
 - **Two structural wins already in place**: the deployed path **never runs the VAE decoder** (§3.2)
   and the **T5 text encoder is episode-cached** (§2.2, per-instruction `_text_cache`).
 - **Net quality-preserving speedup ≈ 1.07×** (cross-attn K/V cache 1.019× bit-exact + torch.compile
-  1.051× near-lossless). The only *big* lever found — dual-stream asymmetry (1.61×) — is too lossy
+  1.051× near-lossless). The only *big* lever found - dual-stream asymmetry (1.61×) - is too lossy
   at DS=2 (task success 100%→60%) and needs a milder setting or a finetune to be viable.
 
 ## bf16 baseline (deployed control path, decoder off, text cached)
@@ -25,7 +25,7 @@ Warm steady-state replan = **80.97 s** (n=3, very stable; video 25 steps / actio
 | capture per-layer feats | 1 | 3.5% |
 | action-expert (IDM) denoise | 50 | 6.9% (111 ms/step) |
 | VAE encode (rgb+flow) | 2 | 0.2% |
-| scheduler/glue | — | 1.4% |
+| scheduler/glue | - | 1.4% |
 
 → DiT forward (video + capture) = **91.6%** of the replan.
 
@@ -39,7 +39,7 @@ T=13, H=24, W=20 → ~1560 tokens/stream, **joint seq ~3120**.
 | **FFN GEMMs** (ffn=14336, M≈1560) | ~26% | big-GEMM |
 | self-attn q/k/v/o proj | ~9% | |
 | text cross-attn (512 tok) | ~8% | §2.1 K/V cache target |
-| SDPA self-attn core | ~6% | **already flash/efficient (6 ms vs 90 ms math) — no lever** |
+| SDPA self-attn core | ~6% | **already flash/efficient (6 ms vs 90 ms math) - no lever** |
 | RoPE (fp64) | ~3% | |
 
 Ruled out by measurement: SDPA backend is already optimal; the DiT stays GPU-resident
@@ -51,20 +51,20 @@ Ruled out by measurement: SDPA backend is already optimal; the DiT stays GPU-res
 |---|---|---|---|---|
 | Cross-attn K/V + text-embed cache (§2.1) | general | **1.019×** | bit-exact (max\|Δ\|=0) | **adopt** (free, minor) |
 | torch.compile block fn (§4) | conditional | **1.051×** | near-lossless (cos 0.9999), one-time 78 s compile | **adopt** (modest) |
-| W8A8 int8 FFN(+qkvo) (§2.5) | general* | **0.79×** | lossy | **REJECT — regression** |
+| W8A8 int8 FFN(+qkvo) (§2.5) | general* | **0.79×** | lossy | **REJECT - regression** |
 | **Dual-stream asymmetry** (flow grid, unique) | model-specific | **1.27× @ 18×16 … 1.65× @ DS2** | cos ~0.93 (NOT near-lossless); closed-loop 18×16 preserves success (click_bell 9/10 vs 8/10 @1.28×), DS2 degrades -20 pts | **opt-in "fast" preset, NOT default** |
 | fp64→fp32 RoPE | conditional | ~1.02× (est.) | max\|Δ\|=0.18, not exact | skip (low ROI) |
 
 ### Why W8A8 is a regression here (correction to the playbook hypothesis)
 FlowWAM's hot loop *is* big-GEMM (ffn=14336, run 26×/replan), which suggested §2.5 quant should
-pay off — but it does **not** on this ROCm stack. Isolated `torch._int_mm` at M=1560:
+pay off - but it does **not** on this ROCm stack. Isolated `torch._int_mm` at M=1560:
 `ffn_up 3072→14336 = 0.28×`, `ffn_down 14336→3072 = 1.17×`, `qkvo 3072→3072 = 0.57×`. The per-token
 dequant over the 14336-wide output is bandwidth-bound and `_int_mm` isn't tuned for the up-proj
 shape. **Big-GEMM ≠ quant win on gfx1151.**
 
 ### FlowWAM-unique lever: dual-stream asymmetry (milder-grid sweep)
 The flow stream shares the DiT blocks and is a secondary motion channel. Running it at reduced
-spatial resolution shrinks the joint self-attention and the flow-side qkvo/FFN/RoPE — **no model_fn
+spatial resolution shrinks the joint self-attention and the flow-side qkvo/FFN/RoPE - **no model_fn
 change needed** (the flow grid/RoPE/head derive from the flow-latent shape). The full-res flow grid
 matches RGB (**24×20 = 480 tok/frame**); DS=2 == 12×10. Sweep vs the full-res flow (25-step loop):
 
@@ -78,7 +78,7 @@ matches RGB (**24×20 = 480 tok/frame**); DS=2 == 12×10. Sweep vs the full-res 
 | 14×12 | 168 | 35.0 | 1.51× | 0.9222 |
 | 12×10 (=DS2) | 120 | 25.0 | 1.65× | 0.9212 |
 
-**Key finding: RGB fidelity cliffs to cos ~0.93 at the *first* reduction and plateaus** — there is
+**Key finding: RGB fidelity cliffs to cos ~0.93 at the *first* reduction and plateaus** - there is
 **no near-lossless milder region**. Best speed-per-fidelity is **18×16 (1.27×, cos 0.9355)**.
 Closed-loop on **discriminating** in-distribution tasks (10 ep/config, seed base 100000, identical
 protocol). `beat_block_hammer` sits at the success ceiling (5/5 across all grids) and cannot separate
@@ -91,12 +91,12 @@ the configs, so we benchmarked in-distribution tasks whose baseline is *partial*
 
 **18×16 preserves task success** (click_bell ≥ baseline within episode noise; lift_pot bit-for-bit
 matched on shared seeds) **while delivering a measured 1.28× closed-loop wall speedup** on click_bell.
-**DS2 (12×10) is rejected**: -20 pts (click_bell) / -17 pts (lift_pot matched) AND *no* wall win —
+**DS2 (12×10) is rejected**: -20 pts (click_bell) / -17 pts (lift_pot matched) AND *no* wall win - 
 the extra failures run to the full sim horizon, so the per-step inference saving is erased (2271 s >
 1891 s baseline). `place_object_basket` and `handover_block` floor at ~0 and run ~30 min/ep (not
 tractable / non-discriminating), so they are excluded.
 
-**Verdict:** shippable **opt-in "fast" preset** — recommended `FLOW_GRID=18x16` (+1.27× on the
+**Verdict:** shippable **opt-in "fast" preset** - recommended `FLOW_GRID=18x16` (+1.27× on the
 video-DiT stage; ~1.28× measured end-to-end closed-loop, composes with the baked cache+compile),
 now **validated quality-preserving on discriminating tasks** but **still not a default** (cos ~0.93
 is a real fidelity trade, and DS2 shows how the cliff degrades harder tasks with no wall win).
@@ -109,7 +109,7 @@ The two quality-preserving levers are **baked into the default inference path** 
 demo (`scripts/flowwam_opt.py` + `scripts/opt_launch.py` + `scripts/opt_python.sh`). The demo sets
 `PYTHON=/ryzers/scripts/opt_python.sh`, which the upstream `start_server.sh` honors to route the
 server through `opt_launch.py` → `flowwam_opt.patch_class()` **before** running the unedited
-`flow_action_server.py` (rules 2.1 / 0.0 — no upstream edits). `patch_class()` wraps the shared
+`flow_action_server.py` (rules 2.1 / 0.0 - no upstream edits). `patch_class()` wraps the shared
 `model_fn_wan_video_dual_stream` and, on the first forward, installs the instance-level cache and
 arms `torch.compile` on the built `dit`.
 
@@ -137,7 +137,7 @@ break because of an optimization. First replan pays a one-time ~80 s Inductor co
   default route → ~1.3×+ on the video-DiT stage). **Validated quality-preserving on discriminating
   closed-loop tasks** (click_bell 9/10 vs 8/10 baseline @1.28× wall; lift_pot matched) → env knob
   `FLOW_GRID=18x16`, **not default** (cos ~0.93; DS2 12×10 degrades -20 pts with no wall win).
-- **Open**: fewer NFE / distillation (§2.6, out of P8 scope — the known knob); wider multi-seed
+- **Open**: fewer NFE / distillation (§2.6, out of P8 scope - the known knob); wider multi-seed
   sweep of 18×16 only if it is ever promoted toward default.
 
 ## Reproduce

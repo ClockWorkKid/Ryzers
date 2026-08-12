@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 #
 # Model-agnostic MimicGen (robosuite/MuJoCo) simulator base image for AMD Strix Halo
-# (gfx1151, ROCm 7.2.2). Ships ONLY the simulator + a small harness (sim_mimicgen) that
+# (gfx1151, ROCm 7.14). Ships ONLY the simulator + a small harness (sim_mimicgen) that
 # exposes a model-agnostic policy seam + a generic closed-loop / sanity runner. No policy or
 # model weights: layer a VLA/WAM (VERA, ...) on top with `ryzers build simulation/mimicgen <model>`
 # and select a policy at runtime via POLICY_FACTORY (see README).

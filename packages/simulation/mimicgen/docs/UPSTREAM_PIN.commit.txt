@@ -1,0 +1,24 @@
+NVlabs/mimicgen   (MimicGen manipulation sim: robosuite/MuJoCo env creation + per-task object XMLs/meshes)
+https://github.com/NVlabs/mimicgen
+  editable clone at build time (default branch); provides mimicgen.utils.robomimic_utils.create_env
+  and the task assets (mimicgen/models/robosuite/assets/objects/*.xml) that the 9 core tasks load.
+
+Eval harness (reused unchanged, rule 2.1): sizhe-li/VERA
+https://github.com/sizhe-li/VERA
+commit fe8561aaa3783230d01d696987992f7eeacb2e12   (config.yaml VERA_COMMIT / Dockerfile ARG)
+  vera.env_runner.MimicgenRunner (reset-to-demo eval, demo-state warmup, success tracking,
+  per-view videos) + vera.server.protocol.websocket_policy_client (the obs->action-chunk seam).
+  license: MIT
+
+Sim stack (installed via vera[eval], pinned by tag / carried by the ROCm base image):
+  ARISE-Initiative/robomimic   tag v0.5.0   (env wrapper + dataset utils; installed --no-deps,
+    transformers/diffusers/huggingface_hub unpinned as none of its diffusion/LM algos are used)
+  https://github.com/ARISE-Initiative/robomimic
+  ARISE-Initiative/robosuite   1.4          (OSC_POSE 7-D controller + MuJoCo bindings)
+  https://github.com/ARISE-Initiative/robosuite
+  mujoco (pip)                              (base-image ROCm torch kept; upstream CUDA torch pin stripped)
+
+Datasets (third-party, fetched at run time into the /sim_data mount, never re-hosted - rule 8):
+  amandlek/mimicgen_datasets   (HF; 9 core-task hdf5 = env config + demo initial states:
+    coffee_d0/d1, square_d0/d1/d2, stack_d0/d1, stack_three_d0/d1)
+  https://huggingface.co/datasets/amandlek/mimicgen_datasets

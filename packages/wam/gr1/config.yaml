@@ -1,8 +1,8 @@
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-# init_image omitted: ryzers defaults to the ROCm 7.2.2 base
-# (rocm/pytorch torch 2.10.0), which already ships the ROCm torch stack.
+# ROCm 7.14 base (rocm/pytorch torch 2.10.0), the current standard for these ports.
+init_image: rocm/pytorch:rocm7.14_ubuntu24.04_py3.12_pytorch_release_2.10.0
 #
 # Env knobs validated on Strix Halo (gfx1151) for the ROCm transformer sampling/attention path:
 #  * TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL + TORCH_BLAS_PREFER_HIPBLASLT=0 keep the attention
@@ -47,7 +47,7 @@ environment_variables:
 - 'CALVIN_ROOT=${CALVIN_ROOT:-/repos/calvin}'
 - 'EP_LEN=${EP_LEN:-}'
 - 'NUM_TASKS=${NUM_TASKS:-}'
-# Phase 4 inference optimizations (demos/gr1_optim.py; see OPTIMIZATIONS.md). Defaults = the
+# Phase 4 inference optimizations (demos/gr1_optim.py; see RUNTIME_OPTIMIZATION.md). Defaults = the
 # recommended fast config fp16 + SDPA (6.8x vs fp32, closed-loop 8/8, arm MAE unchanged). Set
 # GR1_AMP=off GR1_SDPA=0 for the fp32 numerical reference, or add GR1_COMPILE=1 for max
 # throughput (8.7x, also 8/8, at a one-time first-step compile cost).

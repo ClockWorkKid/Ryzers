@@ -1,7 +1,7 @@
 # AHA-WAM runtime optimizations on Strix Halo (ROCm)
 
-A living overview of the runtime optimizations we applied to make **AHA-WAM** — the
-asynchronous Wan2.2-TI2V-5B world-action model — run faster on **AMD Strix Halo (Radeon
+A living overview of the runtime optimizations we applied to make **AHA-WAM** - the
+asynchronous Wan2.2-TI2V-5B world-action model - run faster on **AMD Strix Halo (Radeon
 8060S, `gfx1151`), ROCm 7.2.2, PyTorch + bf16**. Optimizations are grouped into **portable**
 ones (generalize to most video-DiT / diffusion-policy world models) and **AHA-WAM-specific**
 ones, plus how they stack toward real-time control rates.
@@ -13,7 +13,7 @@ ones, plus how they stack toward real-time control rates.
 
 ---
 
-## 1. TL;DR — what worked, and how much
+## 1. TL;DR - what worked, and how much
 
 | Optimization | Class | Metric | Gain | Lossless? |
 |---|---|---|---|---|
@@ -23,11 +23,11 @@ ones, plus how they stack toward real-time control rates.
 | Cache static text embedding | redundant compute | video prefill | **412&rarr;250 ms (1.65&times;, &minus;162 ms)** | yes (bit-identical) |
 | `torch.compile` action path | compiler fusion | per denoise step | 48.2&rarr;43.4 ms (1.11&times;) | ~0.47% drift, opt-in |
 | SDPA backend selection + bf16 | kernel | attention | attention already <2 ms | yes |
-| HIP-graph capture | launch overhead | per denoise step | **deferred** (capture fails as-is) | — |
+| HIP-graph capture | launch overhead | per denoise step | **deferred** (capture fails as-is) | - |
 
 **Headline:** on AHA-WAM-Flash the shippable stack (async + Flash + batched KV editor + text
 cache) takes the fast executor to **~153 ms/action-chunk &rArr; ~105 control Hz**, with the slow
-planner hidden off the control loop — a **2.66&times;** executor speedup over the un-batched path
+planner hidden off the control loop - a **2.66&times;** executor speedup over the un-batched path
 at zero task-quality cost.
 
 ---
@@ -39,13 +39,13 @@ AHA-WAM is an **asynchronous** Wan2.2-TI2V-5B world-action model: 13.74 B params
 0.084 B), ~30 GB weights in bf16. It splits inference into two phases that run at different
 rates:
 
-- **`phase="video"`** — observation-guided video-context prefill (the **slow planner**);
-- **`phase="action"`** — one action-DiT chunk (`action_chunk_size`=16 control steps) that
+- **`phase="video"`** - observation-guided video-context prefill (the **slow planner**);
+- **`phase="action"`** - one action-DiT chunk (`action_chunk_size`=16 control steps) that
   reuses the prefilled video KV cache (the **fast executor**).
 
 Baseline two-phase latency (bf16, Flash 1-step): video prefill **419 ms**, action chunk
 **493 ms** (= 16 control steps &rArr; ~32 control Hz). The action executor operates on a *tiny*
-problem — 16 action tokens attending over a fixed 120-token video context — which is the root
+problem - 16 action tokens attending over a fixed 120-token video context - which is the root
 cause of the executor bottleneck addressed in §4.1.
 
 ---
@@ -54,7 +54,7 @@ cause of the executor bottleneck addressed in §4.1.
 
 First things to try on any similarly-structured video-DiT / diffusion-policy world model.
 
-### 3.1 Few-step ODE / consistency distillation ("Flash")  — biggest single lever
+### 3.1 Few-step ODE / consistency distillation ("Flash") - biggest single lever
 Distill the multi-step sampler down to **1 step**. On the AHA-WAM action path each extra
 denoise step costs ~49 ms and the fixed per-chunk overhead dominates, so going 10&rarr;1 step
 removes almost all of the denoise cost. In our RoboTwin closed-loop suite the 1-step Flash
@@ -62,7 +62,7 @@ model **matched or exceeded** the 10-step base on every task (small samples), i.
 *action* success (not perceptual fidelity) the distilled model is not a downgrade. **Do this
 first.**
 
-### 3.2 Asynchronous two-phase execution — decouple slow planning from fast control
+### 3.2 Asynchronous two-phase execution - decouple slow planning from fast control
 Run the expensive world/context prefill on a background channel and let a cheap executor emit
 action chunks against the cached context. This **hides the planner off the control loop**
 entirely (the ~250&ndash;419 ms prefill no longer blocks the ~105 Hz executor). Any model with a
@@ -101,7 +101,7 @@ compute-bound**. Fix: stack the per-layer LN/Linear weights once and run the rou
 - Quality: rel diff 1.5e-4 (reduction-order rounding, inside bf16 epsilon).
 
 **Transferable lesson:** any per-layer Python loop over tiny GEMMs on this GPU is a prime
-target — batch across layers so tiles fill the CUs instead of launching many one-tile kernels.
+target - batch across layers so tiles fill the CUs instead of launching many one-tile kernels.
 
 ### 4.2 `torch.compile` the action path (modest, opt-in)
 `torch.compile(dynamic=False)` on the denoise step: **48.2 &rarr; 43.4 ms/step (1.11&times;)**.
@@ -117,11 +117,11 @@ Manual `torch.cuda.CUDAGraph` capture of the denoise step **fails**
 skips cudagraphs for the same graph-break reason. Needs a refactor first (static I/O buffers,
 remove host syncs, flatten KV lists to preallocated tensors). After §4.1 removed the
 launch-bound editor, the remaining step is largely compute-bound (49 ms, big GEMMs), so the
-graph ceiling is now modest — hence deferred.
+graph ceiling is now modest - hence deferred.
 
 ---
 
-## 5. Why these work — the underlying bottleneck classes
+## 5. Why these work - the underlying bottleneck classes
 
 | Bottleneck class | Symptom | Fix used |
 |---|---|---|
@@ -131,7 +131,7 @@ graph ceiling is now modest — hence deferred.
 | Serial planner + executor | slow understanding blocks control | **async two-phase** (3.2) |
 | Compiler-unfriendly graph | complex ops / dynamic KV break fusion & graphs | `torch.compile` opt-in (4.2); refactor for graphs (4.3) |
 
-Attention and full-tile DiT GEMMs are already efficient on this hardware — spending effort
+Attention and full-tile DiT GEMMs are already efficient on this hardware - spending effort
 there has low ROI.
 
 ---
@@ -140,7 +140,7 @@ there has low ROI.
 
 Current AHA-WAM-Flash executor: **~153 ms/chunk &rArr; ~105 control Hz** (16 control steps per
 chunk), planner hidden async. Remaining levers, in rough ROI order:
-1. **Skip/downsample the obs-VAE** per chunk (~67 ms, ~14% of the executor) — largest remaining item.
+1. **Skip/downsample the obs-VAE** per chunk (~67 ms, ~14% of the executor) - largest remaining item.
 2. **Capture-safe refactor + HIP graph** the denoise step (removes residual per-launch overhead).
 3. **fp8/int8** for umt5 + video-DiT prefill (planner-side; already tile-efficient so smaller gain).
 4. **Offload the cached text encoder** (~11 GB VRAM) after first encode.
@@ -154,7 +154,6 @@ the planner already off the control loop.
 
 - Efficiency toggles (default on): `AHAWAM_KV_EDITOR_FAST=1` (batched KV editor),
   `AHAWAM_CACHE_TEXT_CONTEXT=1` (text-embed cache). Set to `0` to A/B against the upstream path.
-- Latency demo: `demos/demo_latency.sh` (two-phase latency + executor control Hz + SDPA backends).
 - Raw profiles / analysis: `artifacts/ahawam/perf/` (`ANALYSIS.md`, `OPT_RESULTS.md`,
   `BASELINE_AND_AUDIT.md`, `perf_flash.json`, `perf_*.png`).
 
