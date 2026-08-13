@@ -1,0 +1,13 @@
+variant,stage,spatial,object,goal,long,mean,delta_vs_fp32
+cnn,fp32,95,85,80,85,86.2,
+cnn,w8a8,95,85,85,95,90.0,+3.8
+cnn,w4a6ptq,75,35,75,40,56.2,-30.0
+cnn,w4a6qat,90,95,95,100,95.0,+8.8
+cnn,redist,50,75,70,45,60.0,-26.2
+cnn,redistqatft,65,25,80,20,47.5,-38.8
+tinyvit,fp32,90,95,90,95,92.5,
+tinyvit,w8a8,95,100,100,95,97.5,+5.0
+tinyvit,w4a6ptq,90,30,70,15,51.2,-41.2
+tinyvit,w4a6qat,100,100,95,80,93.8,+1.2
+tinyvit,redist,75,80,95,75,81.2,-11.2
+tinyvit,redistqatft,70,35,75,45,56.2,-36.2
