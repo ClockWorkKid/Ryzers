@@ -23,7 +23,7 @@ Attention is quantized by replacing the inner scaled-dot-product attention with 
 Two schemes are compared.
 
 * **Uniform.** Every linear layer and every attention block in the expert is quantized to the target weight/activation bit width. The input/output layers (time and action embeddings, the two context projections, the final velocity head) are pinned to 8-bit.
-* **Cross-attention in full precision.** Identical to the uniform scheme except the 36 cross-attention modules (their projections and their attention block) are left in full precision. Under this scheme 223 of the 295 linear layers are quantized, 72 remain full precision, and 36 self-attention blocks use quantized attention.
+* **Cross-attention in full precision.** Identical to the uniform scheme except the 36 cross-attention modules are left in full precision. Concretely, this reverts each block's cross-attention query projection (`q_proj`) and output projection (`out_proj`), together with its quantized-attention block (the query, key, value, softmax input, attention weights, and attention output quantizers), back to full precision. It is important to note what is not reverted: the key and value that cross-attention reads are not produced inside the cross-attention module but by the shared context projections (`context_k_proj`, `context_v_proj`), which belong to the input/output group and therefore stay quantized at 8-bit. The expensive projection of the long backbone context into keys and values is thus still done in low precision; only the small action-side query and output projections, and the attention math itself, are full precision. Under this scheme 223 of the 295 linear layers are quantized, 72 (the 36 `q_proj` plus 36 `out_proj`) remain full precision, and 36 self-attention blocks use quantized attention.
 
 ### 2.3 Calibration and fine-tuning
 
@@ -52,9 +52,15 @@ Quantizing one component at a time at W8A8 and measuring the held-out flow-match
 | **Cross-attention** | **1.545** |
 | All (uniform) | 1.570 |
 
-Cross-attention alone reproduces the loss of the fully uniform model; every other component is essentially free at 8-bit. Keeping cross-attention in full precision and quantizing the rest to W8A8 gives a held-out flow loss of 0.380 and 100% closed-loop success with PTQ only.
+Cross-attention alone reproduces the loss of the fully uniform model; every other component is essentially free at 8-bit. Keeping cross-attention in full precision and quantizing the rest to W8A8 gives a held-out flow loss of 0.380 and 100% closed-loop success with PTQ only. This matches the role of cross-attention in the architecture: it is the only pathway by which the small action stream reads the frozen vision-language backbone's context, so it carries the task conditioning that steers every predicted action. Quantization noise on that pathway corrupts the conditioning and the predicted actions drift, whereas the self-attention, feed-forward, and modulation paths operate within the action stream and tolerate low precision.
 
-### 3.2 Bit-width grid (cross-attention in full precision)
+### 3.2 The cost of exempting cross-attention is small
+
+Leaving cross-attention in full precision sounds expensive, but in this expert it is not, because the module is a "few queries attend to many keys" block. Each Euler step processes only the handful of action tokens in the chunk (hidden size 1024, 16 heads), while cross-attention reads the full backbone context (images plus prompt), which is hundreds to over a thousand tokens. The query side is therefore tiny and the two cross-attention weight projections are cheap. Counting the weight-multiply work per block, which is the work that weight quantization actually shrinks, the budget of linear layers splits roughly as: MLP (`up_proj`, `gate_proj`, `down_proj`) about 57%, self-attention (`qkv`, `out_proj`) about 28%, the adaptive-layer-norm modulation about 1%, and the two full-precision cross-attention projections (`q_proj`, `out_proj`) only about 13-14%. Leaving those two projections full precision thus forfeits roughly a seventh of the quantizable weight compute; the other ~86%, plus the 8-bit context key/value projections that carry the expensive long-context work, still run in low precision, so almost the entire memory and compute benefit of quantization is retained.
+
+Cross-attention's other cost is the query-key-softmax-value attention over the long context. That term grows with context length and can be comparable to a single projection, but it is an activation-times-activation operation rather than a weight matmul, so neither scheme quantizes it. The net picture is a textbook mixed-precision outcome: a small, sensitive minority of the layers (about one seventh of the weight compute) dominates the quantization error, and exempting exactly that minority recovers full-precision closed-loop success while preserving nearly all of the compression.
+
+### 3.3 Bit-width grid (cross-attention in full precision)
 
 Post-training-quantization flow loss across the grid (full precision 0.382):
 
@@ -80,7 +86,7 @@ Closed-loop success (%), full-precision baseline 99.0. Cells with weights at 3 b
 
 Down to 3-bit weights with 4-bit or higher activations the expert stays within about 4-9 points of the full-precision baseline, using post-training quantization only. No QAT is needed in this region.
 
-### 3.3 The 2-bit-weight floor
+### 3.4 The 2-bit-weight floor
 
 Two-bit weights break closed-loop control regardless of activation precision. QAT lowers the held-out flow loss of the 2-bit cells to 0.07-0.12, below the full-precision value, but closed-loop success stays between 20% and 35%:
 
