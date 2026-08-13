@@ -1,0 +1,25 @@
+# MolmoAct2 action-expert quantization -- FINAL closed-loop grid.
+# Scheme: CROSS-ATTENTION kept high-precision (FP); self-attn/MLP/AdaLN/IO quantized to W/A.
+# Metric: mean LIBERO closed-loop success % over 4 suites, light budget (20 ep/suite).
+# FP baseline mean = 99.0.  W>=3 = PTQ-only (no QAT).  W2 = QAT-recovered.
+# W2 flow loss recovers under QAT (0.07-0.12) but closed-loop does NOT -> 2-bit weights are the floor.
+# W>=3 rows: PTQ-only, light budget (20 ep/suite).
+# W2 row: QAT, CLEAN re-run at 50 ep/suite x 4 suites (200 ep/cell) for tight, equal-coverage stats.
+#   -> A8/A6/A4 are FLAT ~20-24% (the earlier 'lower A -> better' ordering was coverage+noise).
+#   -> W2A2=34.5 is somewhat higher but each W2 cell is QAT'd independently (run-to-run variance
+#      in a degenerate ~broken regime); no physical mechanism for fewer act bits to help. All W2
+#      cells are unusable vs FP=99. Would need multiple QAT seeds for error bars, not worth it.
+weight_bits,act_bits,method,cl_success_mean,n_suites,ep_per_suite,ptq_flow_loss,qat_flow_loss
+8,8,PTQ,100.0,4,20,0.3796,
+6,8,PTQ,100.0,4,20,0.3787,
+6,6,PTQ,98.8,4,20,0.3789,
+4,8,PTQ,96.2,4,20,0.3737,
+4,6,PTQ,96.2,4,20,0.3734,
+4,4,PTQ,95.0,4,20,0.5761,
+3,8,PTQ,96.2,4,20,0.3945,
+3,6,PTQ,96.2,4,20,0.3983,
+3,4,PTQ,90.0,3,20,0.6293,
+2,8,QAT,23.5,4,50,0.9021,0.0717
+2,6,QAT,23.5,4,50,0.9165,0.0710
+2,4,QAT,20.0,4,50,0.9187,0.0834
+2,2,QAT,34.5,4,50,8.9170,0.1238
