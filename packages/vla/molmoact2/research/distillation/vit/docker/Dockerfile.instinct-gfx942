@@ -1,5 +1,5 @@
 # MolmoAct2 vision-encoder DISTILLATION + closed-loop LIBERO image
-# Instinct MI300X/MI325X (gfx942 / CDNA3). Same clean, self-contained ROCm 7.2 recipe
+# MI300X/MI325X (gfx942 / CDNA3). Same clean, self-contained ROCm 7.2 recipe
 # as Dockerfile.instinct-gfx950 (the official base is multi-arch: gfx942 + gfx950),
 # built here so we can run on whichever cluster is free. NO roi_overlay /
 # resume_patch / self-distill remnants.

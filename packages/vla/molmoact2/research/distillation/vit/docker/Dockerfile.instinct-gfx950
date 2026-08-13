@@ -1,5 +1,5 @@
 # MolmoAct2 vision-encoder DISTILLATION + closed-loop LIBERO image
-# Instinct MI355X (gfx950 / CDNA4). Clean, self-contained ROCm 7.2 build — NO
+# MI355X (gfx950 / CDNA4). Clean, self-contained ROCm 7.2 build — NO
 # roi_overlay / resume_patch / self-distill remnants from the prior run.
 # Covers M0.5-M5: torchdistill distillation, frozen MolmoAct2 teacher, LIBERO
 # closed-loop eval. Training loop is torchdistill; our code is a thin package.
