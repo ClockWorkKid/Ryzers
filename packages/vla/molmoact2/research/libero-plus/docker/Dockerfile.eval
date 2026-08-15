@@ -1,0 +1,72 @@
+# LIBERO-plus closed-loop EVAL image for MolmoAct2 (AMD ROCm).
+# Adapts the upstream lerobot recipe (docker/Dockerfile.benchmark.libero_plus) onto the training
+# base above. That base already ships lerobot + the MolmoAct2 policy and the registered
+# `libero_plus` env type; here we only add the LIBERO-plus simulator stack (CPU MuJoCo + OSMesa
+# software rendering) and its assets. Compute-only CDNA GPUs have no graphics engine, so headless
+# MuJoCo must use OSMesa (llvmpipe/CPU) rendering.
+# Assets are pulled from the public HF repo at BUILD time (rule: we never vendor the 6.4 GB binaries).
+#
+#   docker build -f Dockerfile.eval -t molmoact2-libero-plus-eval:rocm950 .
+FROM molmoact2-lerobot-train:rocm950
+
+ENV MUJOCO_GL=osmesa
+ENV PYOPENGL_PLATFORM=osmesa
+
+# Build-time extras: unzip for the assets.zip; wand/ImageMagick/fontconfig for texture
+# perturbations; libosmesa6 provides libOSMesa.so for MuJoCo's headless CPU renderer.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+         git unzip libexpat1 libfontconfig1-dev libmagickwand-dev \
+         libosmesa6 libglapi-mesa \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# LIBERO-plus runtime deps (pinned per upstream recipe). robosuite==1.4.1 is MANDATORY: the fork
+# uses `single_arm_env`, removed in robosuite>=1.5. CPU sim libs only; PIP_CONSTRAINT pins the
+# installed ROCm torch trio by PUBLIC version so pip never swaps in CUDA wheels.
+RUN set -e; \
+    python -c "import torch;print('torch=='+torch.__version__.split('+')[0])"        > /tmp/torch-con.txt; \
+    python -c "import torchvision;print('torchvision=='+torchvision.__version__.split('+')[0])" >> /tmp/torch-con.txt 2>/dev/null || true; \
+    python -c "import torchaudio;print('torchaudio=='+torchaudio.__version__.split('+')[0])"     >> /tmp/torch-con.txt 2>/dev/null || true; \
+    PIP_CONSTRAINT=/tmp/torch-con.txt pip install --no-cache-dir \
+        "robosuite==1.4.1" "bddl==1.0.1" "easydict==1.13" "mujoco==3.7.0" \
+        "matplotlib==3.10.8" "Wand==0.6.13" "scikit-image==0.25.2" "gym==0.26.2"
+
+# Extra import-time deps the base lacks. --no-deps so robomimic does NOT drag in egl_probe (whose
+# wheel build needs EGL headers absent here); real transitive deps already ship in the base.
+RUN pip install --no-cache-dir --no-deps \
+        "future==1.0.0" "hydra-core==1.3.4" "robomimic==0.3.0" "thop==0.1.1.post2209072238"
+
+# Clone LIBERO-plus and make it importable as `libero`, pinned to the SHA the lerobot benchmark
+# image uses. Uninstall any hf-libero so `import libero` resolves to the LIBERO-plus fork.
+ARG LIBERO_PLUS_SHA=4976dc3
+ENV LIBERO_PLUS_ROOT=/opt/libero-plus/libero/libero
+RUN git clone https://github.com/sylvestf/LIBERO-plus.git /opt/libero-plus \
+    && git -C /opt/libero-plus checkout ${LIBERO_PLUS_SHA} \
+    && cd /opt/libero-plus && pip install --no-cache-dir --no-deps -e "." \
+    && (pip uninstall -y hf-libero 2>/dev/null || true)
+ENV PYTHONPATH="/opt/libero-plus:${PYTHONPATH}"
+
+# Perturbation textures/scenes ship only in Sylvest/LIBERO-plus's assets.zip (6.4 GB) under a deep
+# nested prefix -- download, extract, flatten under the assets dir.
+RUN python -c "from huggingface_hub import hf_hub_download; hf_hub_download(repo_id='Sylvest/LIBERO-plus', repo_type='dataset', filename='assets.zip', local_dir='/tmp/lp-dl')" \
+    && unzip -q /tmp/lp-dl/assets.zip -d /tmp/lp-dl/extract \
+    && ASSETS_DIR=$(find /tmp/lp-dl/extract -type d -name assets | head -1) \
+    && rm -rf "${LIBERO_PLUS_ROOT}/assets" \
+    && mv "${ASSETS_DIR}" "${LIBERO_PLUS_ROOT}/assets" \
+    && rm -rf /tmp/lp-dl
+
+# Non-interactive libero config (import libero calls input() when missing). Written to both /root
+# and $HOME to be robust to the base image's user.
+RUN for H in /root "${HOME:-/root}"; do \
+        mkdir -p "$H/.libero" && \
+        printf "assets: %s/assets\nbddl_files: %s/bddl_files\ndatasets: %s/../datasets\ninit_states: %s/init_files\n" \
+            "${LIBERO_PLUS_ROOT}" "${LIBERO_PLUS_ROOT}" "${LIBERO_PLUS_ROOT}" "${LIBERO_PLUS_ROOT}" \
+            > "$H/.libero/config.yaml"; \
+    done
+
+# Bake in the NumPy 2.0 compat patch (np.float_ -> np.float64); the fog mapsize patch is applied at
+# run time by eval_shard_ids.sh (both are genuine upstream bug fixes).
+RUN EW=/opt/libero-plus/libero/libero/envs/env_wrapper.py; \
+    [ -f "$EW" ] && sed -i 's/np\.float_/np.float64/g' "$EW" || true
+
+CMD ["/bin/bash"]

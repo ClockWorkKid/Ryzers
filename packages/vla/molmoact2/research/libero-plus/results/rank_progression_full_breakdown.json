@@ -1,0 +1,48 @@
+{
+  "benchmark": "LIBERO-plus",
+  "model": "MolmoAct2 (SigLip ViT + Qwen LLM + flow-matching action expert), curriculum LoRA",
+  "provenance_correction_92pct": "CORRECTED 2026-08-13: earlier docs referenced a '92%'. That figure was a 90-rollout SMOKE (30 tasks x 3 episodes) of a SEPARATE, barely-adapted checkpoint (liberoplus_ft_fp32/015000, ~0.013 epoch / 1.3% of one pass), NOT a full-benchmark result and NOT the curriculum-LoRA model tabulated in this file. It must not be posted as a target or an achieved score. It was demoted to a 'model-validity smoke' by dev policy on 2026-07-20.",
+  "external_context": "Official LIBERO-plus leaderboard (CVPR2026 / arXiv 2510.13626): best = OpenVLA-OFT+ 79.6%, RIPT-VLA 68.4, OpenVLA-OFT 69.6, pi0-fast 61.6, pi0 53.6. MolmoAct2 curriculum-LoRA (~67-70%) sits mid-pack, above pi0/pi0-fast. The pi0.5 '~85.7%' figure is from a DIFFERENT paper (WAM survey, arXiv 2603.22078), not this leaderboard.",
+  "scope_notes": [
+    "s1 (rank-16) = FULL 10,030-task baseline (MI210-class GPU).",
+    "s4 (rank-128) and s5 (rank-256) = FULL 10,030-task runs, COMPLETE (MI355X-class GPUs; 184/184 shards each, verified 2026-08-14). Perturbation counts sum to 10,030.",
+    "s2 (rank-32) and s3 (rank-64) = COMPLETE stratified 1,673-task subset only (uniform stride per suite => proportional across the 4 suites + 7 perturbation categories + 5 difficulty levels). Full 10,030 runs for s2/s3 were intentionally SKIPPED per dev decision 2026-08-13 (subset is a representative estimator; the full-vs-subset gap on s4/s5 is <1 pt, validating the subset).",
+    "Head-to-head rank curve on identical FULL 10,030 basis: s1 67.2 -> s4 68.4 -> s5 69.6."
+  ],
+  "overall_and_per_suite": {
+    "s1_rank16_full":   {"overall": 67.2, "libero_spatial": 84.0, "libero_object": 79.8, "libero_goal": 74.6, "libero_10": 30.9},
+    "s2_rank32_subset": {"overall": 68.6, "libero_spatial": 84.3, "libero_object": 79.8, "libero_goal": 78.2, "libero_10": 32.4},
+    "s3_rank64_subset": {"overall": 68.9, "libero_spatial": 86.3, "libero_object": 77.6, "libero_goal": 80.3, "libero_10": 31.9},
+    "s4_rank128_subset":{"overall": 69.2, "libero_spatial": 87.5, "libero_object": 77.6, "libero_goal": 79.9, "libero_10": 32.1},
+    "s4_rank128_full":  {"overall": 68.4, "libero_spatial": 86.0, "libero_object": 80.2, "libero_goal": 77.1, "libero_10": 30.8, "n": 10030},
+    "s5_rank256_subset":{"overall": 69.9, "libero_spatial": 85.8, "libero_object": 82.4, "libero_goal": 81.0, "libero_10": 30.7},
+    "s5_rank256_full":  {"overall": 69.6, "libero_spatial": 86.5, "libero_object": 81.4, "libero_goal": 79.5, "libero_10": 31.7, "n": 10030}
+  },
+  "per_perturbation": {
+    "s1_rank16_full":   {"Robot Initial States": 52.5, "Camera Viewpoints": 65.7, "Sensor Noise": 64.5, "Objects Layout": 67.9, "Language Instructions": 72.9, "Light Conditions": 75.9, "Background Textures": 75.9},
+    "s2_rank32_subset": {"Robot Initial States": 54.3, "Camera Viewpoints": 66.9, "Sensor Noise": 67.4, "Objects Layout": 67.5, "Language Instructions": 72.0, "Light Conditions": 82.5, "Background Textures": 75.1},
+    "s3_rank64_subset": {"Robot Initial States": 55.4, "Camera Viewpoints": 66.5, "Sensor Noise": 65.9, "Objects Layout": 68.2, "Language Instructions": 74.3, "Light Conditions": 81.5, "Background Textures": 76.2},
+    "s4_rank128_subset":{"Robot Initial States": 54.3, "Camera Viewpoints": 64.7, "Sensor Noise": 66.7, "Objects Layout": 66.7, "Language Instructions": 77.0, "Light Conditions": 82.5, "Background Textures": 79.0},
+    "s4_rank128_full":  {"Robot Initial States": 52.7, "Camera Viewpoints": 66.9, "Sensor Noise": 65.8, "Objects Layout": 66.0, "Language Instructions": 73.5, "Light Conditions": 83.2, "Background Textures": 77.3},
+    "s5_rank256_subset":{"Robot Initial States": 55.0, "Camera Viewpoints": 66.9, "Sensor Noise": 68.5, "Objects Layout": 67.1, "Language Instructions": 77.4, "Light Conditions": 83.6, "Background Textures": 76.2},
+    "s5_rank256_full":  {"Robot Initial States": 53.0, "Camera Viewpoints": 68.5, "Sensor Noise": 69.1, "Objects Layout": 66.5, "Language Instructions": 73.8, "Light Conditions": 84.6, "Background Textures": 78.7}
+  },
+  "per_difficulty": {
+    "s1_rank16_full":   {"L1": 75.6, "L2": 73.8, "L3": 70.6, "L4": 67.4, "L5": 48.3},
+    "s2_rank32_subset": {"L1": 73.2, "L2": 73.0, "L3": 74.6, "L4": 70.5, "L5": 51.4},
+    "s3_rank64_subset": {"L1": 74.3, "L2": 74.7, "L3": 73.5, "L4": 67.6, "L5": 54.2},
+    "s4_rank128_subset":{"L1": 73.2, "L2": 76.7, "L3": 73.2, "L4": 70.8, "L5": 51.4},
+    "s4_rank128_full":  {"L1": 77.4, "L2": 76.0, "L3": 71.5, "L4": 67.2, "L5": 49.8},
+    "s5_rank256_subset":{"L1": 72.1, "L2": 75.6, "L3": 75.4, "L4": 70.8, "L5": 54.2},
+    "s5_rank256_full":  {"L1": 78.5, "L2": 76.6, "L3": 71.7, "L4": 69.6, "L5": 51.8}
+  },
+  "findings": [
+    "On the identical FULL 10,030-task basis the rank curve is shallow and near-monotone: 67.2 (r16) -> 68.4 (r128) -> 69.6 (r256); +2.4 pt total from 16x the LoRA rank. Subset estimates (s2 68.6, s3 68.9) fall on the same shallow trend.",
+    "Full-vs-subset agreement is tight (s4: 68.4 full vs 69.2 subset; s5: 69.6 full vs 69.9 subset; <1 pt), confirming the 1,673 stratified subset is a reliable estimator and validating the decision to skip full s2/s3.",
+    "libero_10 (long-horizon) is flat ~31% on full at every rank (s1 30.9, s4 30.8, s5 31.7) => extra LoRA capacity does not fix the dominant long-horizon failure.",
+    "Biggest per-perturbation win from curriculum: Light Conditions +7-9 pt (75.9 -> 83-85 full) and Sensor Noise +4-5 pt (64.5 -> 69 full at r256).",
+    "Robot Initial States remains the weakest dimension at every rank (~53% full) and does NOT improve with rank; Camera Viewpoints / Objects Layout also stay low (~66%) and barely move.",
+    "By difficulty (full), higher rank sharpens the easy end (L1 75.6 -> 78.5) more than the hard end; L5 stays the floor (~50-52%) and is the single biggest bottleneck.",
+    "Context vs peers: MolmoAct2's ~68-70% is mid-pack on the official LIBERO-plus leaderboard (above pi0 53.6 and pi0-fast 61.6, ~OpenVLA-OFT 69.6), below OpenVLA-OFT+ 79.6. Top scores require perturbation-aware (mixed) fine-tuning, which this curriculum LoRA did not do."
+  ]
+}

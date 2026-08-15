@@ -1,0 +1,35 @@
+# MolmoAct2 LIBERO-plus curriculum-LoRA TRAINING image (AMD ROCm).
+# Base is a public ROCm PyTorch release; we add upstream lerobot with the molmoact2 policy extra
+# plus accelerate for multi-GPU launch. Nothing here is hardware-vendor-internal: it builds on any
+# ROCm GPU host (CDNA2/CDNA3/CDNA4). On GPUs without gradient-checkpointing support set
+# GRAD_CKPT=false when calling train.sh.
+#
+#   docker build -t molmoact2-lerobot-train:rocm950 -f Dockerfile.train .
+FROM rocm/pytorch:rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.9.1
+SHELL ["/bin/bash", "-lc"]
+ENV DEBIAN_FRONTEND=noninteractive
+# Pin a known-good upstream lerobot commit for reproducibility (bump deliberately).
+ARG LEROBOT_COMMIT=052d329
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git ffmpeg pkg-config cmake build-essential \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir ninja
+
+# Pin the ROCm torch trio by PUBLIC version so pip never swaps in CUDA wheels while resolving
+# transformers/lerobot deps.
+RUN set -e; \
+    python -c "import torch;print('torch=='+torch.__version__.split('+')[0])"  > /tmp/torch-con.txt; \
+    python -c "import torchvision;print('torchvision=='+torchvision.__version__.split('+')[0])" >> /tmp/torch-con.txt 2>/dev/null || true; \
+    python -c "import torchaudio;print('torchaudio=='+torchaudio.__version__.split('+')[0])"     >> /tmp/torch-con.txt 2>/dev/null || true; \
+    echo "=== torch constraint ==="; cat /tmp/torch-con.txt
+
+# Upstream lerobot with the MolmoAct2 policy (registers the `molmoact2` policy type and, once the
+# eval image adds the sim, the `libero_plus` env type). accelerate drives multi-GPU training.
+RUN set -e; git clone https://github.com/huggingface/lerobot.git /opt/lerobot; \
+    cd /opt/lerobot && git checkout ${LEROBOT_COMMIT}; \
+    PIP_CONSTRAINT=/tmp/torch-con.txt pip install --no-cache-dir -e ".[molmoact2]" \
+      "datasets>=4.7.0,<5.0.0" "pandas>=2.0.0,<3.0.0" "pyarrow>=21.0.0,<30.0.0" \
+      "av>=12,<14" "accelerate>=1.14,<2.0" "peft>=0.13"
+
+CMD ["/bin/bash"]
