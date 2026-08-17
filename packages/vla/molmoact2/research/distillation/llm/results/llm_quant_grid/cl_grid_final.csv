@@ -1,0 +1,25 @@
+# MolmoAct2 LLM-backbone quantization -- FINAL closed-loop grid.
+# Scheme: MIXED-PRECISION -- query/key-value/MLP projections quantized to W/A; the
+#   attention math (scaled-dot-product attention) kept in bf16. Uniform quantization
+#   (attention math included) collapses to 0% even at W8A8.
+# Metric: mean LIBERO closed-loop success % over 4 suites (spatial/object/goal/long).
+#   PTQ arms: 20 episodes/suite.  QAT arms: 50 episodes/suite.  FP baseline mean = 99.0.
+# Flow losses are the held-out flow-matching loss (FP reference for the QAT sweep = 0.2519).
+# Reading: PTQ already reaches FP-level success at W>=6 and at W4A8; QAT lowers the flow
+#   loss far below FP everywhere but only IMPROVES closed-loop at the 4-bit margin (W4A6,
+#   W4A4) -- on the higher-bit cells it OVERFITS the flow loss and reduces closed-loop
+#   success. 3-bit weights and below fail under both methods. Recommended = better of the two.
+weight_bits,act_bits,ptq_cl_success,qat_cl_success,recommended_method,recommended_cl,ptq_flow_loss,qat_flow_loss
+8,8,100.0,78.0,PTQ,100.0,0.2412,0.0625
+6,8,98.8,77.5,PTQ,98.8,0.2358,0.0617
+6,6,83.8,69.5,PTQ,83.8,0.2827,0.0632
+4,8,95.0,80.5,PTQ,95.0,0.2666,0.0638
+4,6,35.0,75.0,QAT,75.0,0.3008,0.0780
+4,4,0.0,11.0,QAT,11.0,1.0040,0.1030
+3,8,0.0,0.0,PTQ,0.0,0.7451,0.3849
+3,6,0.0,0.0,PTQ,0.0,0.8992,0.5030
+3,4,0.0,0.0,PTQ,0.0,1.5486,1.0509
+2,8,0.0,0.0,PTQ,0.0,2.8150,2.8150
+2,6,0.0,0.0,PTQ,0.0,2.9521,2.8005
+2,4,0.0,0.0,PTQ,0.0,3.4730,3.4730
+2,2,0.0,0.0,PTQ,0.0,4.3234,4.3234

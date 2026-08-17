@@ -154,3 +154,156 @@ The SLURM/Apptainer group launchers are in `../../slurm/`: `ae_qat_group.sbatch`
 * `cl_heatmap.png` — closed-loop success heatmap over the bit-width grid.
 * `cl_grid_final.csv` — per-cell flow loss and closed-loop success, with episode counts and the 2-bit caveat.
 * `make_heatmap.py` — regenerates the heatmap from the grid values.
+
+---
+
+# Low-bit quantization of the MolmoAct2 language-model backbone
+
+## Abstract
+
+We repeat the quantization study on the other half of the model: the frozen MolmoAct2 language-model backbone that produces the context the action expert reads. As with the action expert, uniform quantization of the whole backbone destroys closed-loop task success even at 8-bit, and a per-component analysis pins the damage to a single sensitive part. For the backbone this part is the attention computation itself (the scaled-dot-product attention math), not any of the weight projections. Leaving that computation in bfloat16 and quantizing every weight projection recovers full-precision success with post-training quantization alone: 8-bit weights and activations reach 100% closed-loop success, and the backbone stays within a few points of the full-precision baseline down to 4-bit weights with 8-bit activations. The backbone is more sensitive to weight precision than the action expert; success falls off sharply once weights drop below 4 bits with reduced activation precision, and it collapses entirely at 3-bit weights and below. Quantization-aware training is a double-edged tool here: it recovers the borderline cells that post-training quantization leaves broken (4-bit weights with 6-bit activations improves from 35% to 75%), but on the cells that post-training quantization already solves it lowers the training loss far below the full-precision value while making closed-loop success worse, a clear case of the training objective overfitting away from the deployed behaviour. The practical recommendation is therefore post-training quantization for 4-bit weights and above, and quantization-aware training only at the precision margin.
+
+## 1. Model
+
+The backbone is a decoder-only transformer in the Qwen3 style with 36 decoder layers, a hidden size of 2560, and grouped-query attention with 32 query heads and 8 key/value heads of head dimension 128 (so the query projection is 2560 to 4096 and the combined key/value projection is 2560 to 2048). The feed-forward module is a SwiGLU block with an intermediate width of 9728. The backbone holds about 3.6 billion parameters. During this study the vision encoder and the action expert stay in bfloat16; only the backbone is quantized.
+
+The backbone is used as a frozen context provider. It reads the image and prompt tokens once and exposes a per-layer key/value cache; the flow-matching action expert then cross-attends to that cache to produce actions. The backbone is therefore never run autoregressively in this setting, and its quality is measured by how well the downstream action expert still succeeds in closed loop when the backbone is quantized.
+
+## 2. Method
+
+### 2.1 Fake quantization
+
+The fake-quantization recipe is the one validated on the action expert, reused unchanged. Weights are quantized per output channel; activations are quantized per tensor. Weights at 4 bits and above take their scale from the maximum-absolute statistic, while weights at 3 bits and below use a learned step size initialised from statistics, so that fine-tuning can move the scale away from the outlier-dominated maximum. Activation quantizers are the signed per-tensor type at the target bit width. All fake-quantization runs in bfloat16 to match the model's compute dtype, because running it in float32 under the model's autocast produces NaNs during calibration.
+
+The backbone packs the query, key, and value projections into a single fused linear layer. Because the key/value slice is exactly the part the action expert reads, we split the fused layer into an independent query projection and an independent key/value projection. The split is numerically identical to the original layer (a concatenation of two matrix multiplies) but lets us assign the query and key/value paths different precisions and study them separately. The attention math is quantized, when requested, by giving each attention module its own Brevitas quantized scaled-dot-product-attention block and routing that module's attention call through it only for the duration of its own forward pass; this leaves the query/key normalisation ordering, rotary embeddings, grouped-query repetition, and cache update byte-for-byte intact.
+
+### 2.2 Precision assignment
+
+The backbone is decomposed into four quantizable functional groups: the query path (query projection plus attention output projection), the key/value path (the combined key/value projection), the attention math (the scaled-dot-product-attention computation), and the feed-forward SwiGLU block. The token embedding and language-model head form a fifth group that is a no-op on this checkpoint, because the released embedding is a parameter table rather than a quantizable linear layer and the head is off the action path; it is kept only for interface parity with the action-expert study.
+
+Two schemes are compared, exactly as before. The **uniform** scheme quantizes all four active groups (query path, key/value path, attention math, and feed-forward). The **mixed-precision** scheme quantizes the three weight-projection groups (query path, key/value path, and feed-forward) but leaves the attention math in bfloat16. The choice of which group to exempt is made by the sensitivity analysis in Section 3.1.
+
+### 2.3 Calibration and fine-tuning
+
+Post-training quantization calibrates the activation and weight scales on 16 real LIBERO batches in calibration mode, with no gradient updates. Quantization-aware training then fine-tunes the quantized backbone against the flow-matching loss produced through the frozen action expert, for 6000 steps with AdamW, gradient clipping, a short warm-up, and a decay to zero learning rate (peak 5e-5, reduced for the lowest-bit cells). The token embedding is frozen. Because the individual jobs run under a four-hour scheduler limit, training is chunked and resumed across several windows; resume restores the trained weights and quantization scales by moving them onto the device only, with no re-calibration, so the scales do not drift across chunk boundaries. Checkpoints are selected on a held-out set that is disjoint at the episode level from the training episodes (1608 training episodes, 85 held-out episodes, 32 held-out batches), and the selected checkpoint is floored at the post-training-quantization result so that fine-tuning can never be chosen if it fails to improve the held-out loss.
+
+### 2.4 Closed-loop evaluation
+
+Each quantized backbone is loaded into the deployed policy checkpoint and evaluated in closed loop on the four LIBERO suites (spatial, object, goal, and long) using the continuous inference action mode in bfloat16, with the static inference CUDA graph disabled for the same reason as in the action-expert study. Success is the percentage of episodes that complete the task, averaged over the four suites. The post-training-quantization grid uses 20 episodes per suite; the quantization-aware-training grid was re-measured at 50 episodes per suite for tighter statistics.
+
+## 3. Results
+
+### 3.1 Uniform quantization fails, and the cause is the attention math
+
+Under the uniform scheme W8A8 collapses in closed loop (0% success), against a full-precision baseline of 99%. Quantizing one component at a time at W8A8 and measuring the held-out flow-matching loss (full-precision value 0.493) localises the damage to the attention computation:
+
+| Component quantized (W8A8) | Held-out flow loss |
+| --- | --- |
+| Query path (query + output projections) | 0.449 |
+| Key/value path (key/value projection) | 0.448 |
+| Feed-forward (SwiGLU) | 0.424 |
+| **Attention math (scaled-dot-product attention)** | **1.000** |
+| All (uniform) | 1.231 |
+
+The attention math alone reproduces most of the loss of the fully uniform model, while every weight projection is essentially free at 8-bit. Keeping the attention math in bfloat16 and quantizing all three projection groups to W8A8 restores 100% closed-loop success with post-training quantization only. This mirrors the action-expert result, where the single sensitive component was cross-attention; in both halves of the model the fragile part is an attention pathway, and quantizing the surrounding weight projections is cheap. The difference is where the fragility sits: in the action expert it is the cross-attention that reads the backbone context, whereas in the backbone itself it is the attention computation, whose query-times-key products and softmax are an activation-times-activation operation with a wide dynamic range that low-bit activation quantization distorts badly.
+
+### 3.2 Bit-width grid, post-training quantization (mixed-precision scheme)
+
+Closed-loop success (%) with post-training quantization only, mixed-precision scheme, full-precision baseline 99.0, 20 episodes per suite:
+
+| W\A | 8 | 6 | 4 | 2 |
+| --- | --- | --- | --- | --- |
+| 8 | 100.0 | – | – | – |
+| 6 | 98.8 | 83.8 | – | – |
+| 4 | 95.0 | 35.0 | 0.0 | – |
+| 3 | 0.0 | 0.0 | 0.0 | – |
+| 2 | 0.0 | 0.0 | 0.0 | 0.0 |
+
+Post-training quantization holds full-precision success at 8-bit and 6-bit weights and remains strong at 4-bit weights with 8-bit activations (95%). Below that the backbone degrades quickly: 4-bit weights with 6-bit activations already drop to 35%, and any configuration with 3-bit or 2-bit weights fails outright. The backbone is thus markedly more sensitive to weight precision than the action expert, which stayed near full precision down to 3-bit weights; a plausible reason is that the backbone carries the full visual-linguistic scene understanding, so its weights encode more information per parameter and tolerate less rounding.
+
+### 3.3 Quantization-aware training helps at the margin and hurts where it is not needed
+
+Quantization-aware training was run for every cell. The result is not a uniform improvement, and the reason is instructive. On every cell, training drives the held-out flow-matching loss far below the full-precision value (to roughly 0.06 for the higher-bit cells, against a full-precision 0.252). But lower flow-matching loss does not mean better control, and on the cells that post-training quantization had already solved, fine-tuning moves the weights toward the training objective and away from the deployed behaviour, so closed-loop success falls:
+
+| Cell | Post-training-quantization flow | Quantization-aware-training flow | Post-training-quantization success | Quantization-aware-training success |
+| --- | --- | --- | --- | --- |
+| W8A8 | 0.241 | 0.063 | 100.0 | 78.0 |
+| W6A8 | 0.236 | 0.062 | 98.8 | 77.5 |
+| W4A8 | 0.267 | 0.064 | 95.0 | 80.5 |
+| W6A6 | 0.283 | 0.063 | 83.8 | 69.5 |
+| W4A6 | 0.301 | 0.078 | 35.0 | 75.0 |
+| W4A4 | 1.004 | 0.103 | 0.0 | 11.0 |
+
+The pattern is consistent. Where post-training quantization already reaches full-precision success (8-bit and 6-bit weights, and 4-bit weights with 8-bit activations), quantization-aware training lowers the proxy loss but reduces closed-loop success by roughly fifteen to twenty points, because there is nothing to recover and the extra optimisation only overfits the flow-matching loss on the training episodes. Where post-training quantization leaves a genuine deficit, quantization-aware training helps substantially: the 4-bit-weight, 6-bit-activation cell rises from 35% to 75%, and the 4-bit-weight, 4-bit-activation cell rises from a complete failure to a modest 11%. The held-out flow-matching loss is therefore not a reliable selection signal in the regime where the model already works; the closed-loop measurement is the only trustworthy criterion, and it disagrees with the loss precisely on the cells that matter most. For 3-bit and 2-bit weights, training could not reduce the loss into a usable range and closed-loop success stayed at zero.
+
+### 3.4 Recommended configuration per cell
+
+Taking the better of the two methods for each cell gives the deployable picture for the backbone:
+
+| W\A | 8 | 6 | 4 | 2 |
+| --- | --- | --- | --- | --- |
+| 8 | 100.0 (PTQ) | – | – | – |
+| 6 | 98.8 (PTQ) | 83.8 (PTQ) | – | – |
+| 4 | 95.0 (PTQ) | 75.0 (QAT) | 11.0 (QAT) | – |
+| 3 | 0.0 | 0.0 | 0.0 | – |
+| 2 | 0.0 | 0.0 | 0.0 | 0.0 |
+
+The usable envelope for the backbone is 4-bit weights and above with 6-bit activations or higher: post-training quantization is the right tool at 4-bit-weight/8-bit-activation and everything above it, and quantization-aware training is worth running only at the 4-bit-weight margin. Three-bit weights are the failure boundary for the backbone, one bit higher than the action expert's two-bit floor.
+
+## 4. Reproduction
+
+Hardware and stack: AMD Instinct MI210 GPUs, one four-GPU node per job, SLURM and Apptainer. Code lives in this package (`packages/vla/molmoact2/research/distillation/llm`). The three entry points are `llm_quant.py` (fake-quantization of the backbone), `llm_qat.py` (post-training quantization and quantization-aware-training trainer, with disjoint-episode held-out selection and no-recalibration chunked resume), and `eval_closedloop_llm.py` (loads a quantized backbone into the policy and runs the LIBERO closed-loop evaluation).
+
+The `--groups` flag selects which components to quantize (`attn_q,attn_kv,attn_sdpa,mlp,io`); the uniform scheme uses the first four, and dropping `attn_sdpa` is the mixed-precision scheme. `--target-steps 0` runs post-training quantization only.
+
+Component sensitivity (one group at a time, post-training quantization only):
+
+```bash
+for g in attn_q attn_kv attn_sdpa mlp; do
+  python llm_qat.py --weight-bits 8 --act-bits 8 --io-bits 8 \
+    --groups "$g" --quant-dtype bf16 --target-steps 0 --calib-batches 16 \
+    --out runs/sens_w8a8_$g
+done
+```
+
+One grid cell, post-training quantization only (attention math kept in bfloat16):
+
+```bash
+python llm_qat.py --weight-bits 4 --act-bits 8 --io-bits 8 \
+  --groups attn_q,attn_kv,mlp --quant-dtype bf16 \
+  --target-steps 0 --calib-batches 16 --out runs/mixed_w4a8
+```
+
+One grid cell with quantization-aware training (used at the 4-bit margin):
+
+```bash
+python llm_qat.py --weight-bits 4 --act-bits 6 --io-bits 8 \
+  --groups attn_q,attn_kv,mlp --quant-dtype bf16 \
+  --target-steps 6000 --ae-lr 5e-5 --lr-schedule cosine \
+  --val-frac 0.05 --heldout-batches 32 --calib-batches 16 \
+  --out runs/mixedft_w4a6_io8
+```
+
+Closed-loop evaluation of a saved quantized backbone (one suite shown; repeat for `libero_spatial`, `libero_object`, `libero_goal`, `libero_10`). The saved checkpoint carries the bit widths and the quantized component set, so the evaluation reconstructs the same scheme:
+
+```bash
+QUANT_STATE=runs/mixedft_w4a6_io8/best.pt \
+python eval_closedloop_llm.py \
+  --policy.path=<policy_checkpoint> \
+  --policy.inference_action_mode=continuous \
+  --policy.model_dtype=bfloat16 --policy.use_amp=true \
+  --policy.enable_inference_cuda_graph=false --policy.device=cuda \
+  --env.type=libero --env.task=libero_spatial --env.task_ids="[0,1,2,3,4]" \
+  --eval.n_episodes=10 --output_dir=runs/cl/mixedft_w4a6_libero_spatial
+```
+
+`--eval.n_episodes` is per task; with five task ids this gives 50 episodes per suite. Use 4 for the 20-episode/suite budget used by the post-training-quantization grid.
+
+The SLURM/Apptainer group launchers are in `../../slurm/`: `llm_qat_group.sbatch` runs up to four PTQ/QAT arms on one 4-GPU node (`ARMS="8:8:8 6:6:8 4:6:8 4:4:8"`), `llm_qat_cell_chunk.sbatch` runs a single chunked, seamlessly-resumable QAT cell (for long fine-tunes that must survive a ~4h scheduler wall-time cap), and `llm_cl_group.sbatch` runs the closed-loop eval for a group of cells (it invokes `llm_cl_grouprun.sh` / `llm_cl_inner.sh`, one suite per GPU).
+
+## 5. Artifacts
+
+* `results/llm_quant_grid/cl_grid_final.csv` — per-cell post-training-quantization and quantization-aware-training closed-loop success and held-out flow loss, with the recommended (better-of-the-two) method per cell.
+* `results/llm_quant_grid/cl_heatmap.png` — closed-loop success heatmap over the bit-width grid (recommended per-cell method annotated).
+* `results/llm_quant_grid/make_heatmap.py` — regenerates the heatmap from the grid values.
+* Per-cell flow-loss trajectories live in each run's `train_log.jsonl`.

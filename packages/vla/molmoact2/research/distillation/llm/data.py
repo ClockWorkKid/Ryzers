@@ -25,7 +25,34 @@ _MODEL_KEYS = (
 )
 
 
-def build_dataset_and_preprocessor(args):
+def episode_split(args, val_frac=0.05, seed=0):
+    """Deterministic disjoint train/val episode split for a proper (un-leaked)
+    validation set. Returns (train_eps, val_eps) as lists of episode indices."""
+    from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
+    repo_id = args.repo_id
+    revision = getattr(args, "revision", "main") or "main"
+    meta = LeRobotDatasetMetadata(repo_id, revision=revision)
+    n = 0
+    for src in (getattr(meta, "total_episodes", None),
+                (meta.info.get("total_episodes") if getattr(meta, "info", None) else None)):
+        try:
+            n = int(src)
+            if n > 0:
+                break
+        except (TypeError, ValueError):
+            continue
+    if n <= 0:
+        raise RuntimeError("episode_split: could not determine total_episodes from dataset metadata")
+    idx = list(range(n))
+    import random
+    random.Random(seed).shuffle(idx)
+    n_val = max(1, int(round(n * val_frac)))
+    val_eps = sorted(idx[:n_val])
+    train_eps = sorted(idx[n_val:])
+    return train_eps, val_eps
+
+
+def build_dataset_and_preprocessor(args, episodes_override=None):
     from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
     from lerobot.policies.molmoact2.configuration_molmoact2 import MolmoAct2Config
 
@@ -34,7 +61,7 @@ def build_dataset_and_preprocessor(args):
     # optional per-domain overrides (LIBERO defaults; DROID sets norm_tag + episode subset for the
     # bounded offline mixture). ``episodes`` lets us train on a downloaded subset of a huge dataset.
     norm_tag = getattr(args, "norm_tag", None)
-    episodes = getattr(args, "episodes", None)
+    episodes = episodes_override if episodes_override is not None else getattr(args, "episodes", None)
     # DROID stores frames as VIDEO (mp4); the SIF's default torchcodec backend can't load ffmpeg,
     # so decode with pyav (same backend the 87% LIBERO finetune used). LIBERO frames are images
     # (no decode) so this is a no-op there.
@@ -97,10 +124,13 @@ def iter_libero_batches(args, device):
             yield model_batch
 
 
-def iter_full_batches(args, device):
+def iter_full_batches(args, device, episodes_override=None, shuffle=True):
     """Infinite iterator of FULL preprocessed batches (all tensor keys) on ``device`` --
-    what MolmoAct2Policy.forward(batch) consumes (includes ACTION + pad masks)."""
-    ds, ds_meta, pre, cfg = build_dataset_and_preprocessor(args)
+    what MolmoAct2Policy.forward(batch) consumes (includes ACTION + pad masks).
+
+    ``episodes_override`` restricts to a disjoint episode subset (train vs val split),
+    so a validation iterator never sees training episodes."""
+    ds, ds_meta, pre, cfg = build_dataset_and_preprocessor(args, episodes_override=episodes_override)
     cam_keys = list(getattr(ds_meta, "camera_keys", []))
 
     def _collate(samples):
@@ -111,7 +141,7 @@ def iter_full_batches(args, device):
         return out
 
     dl = torch.utils.data.DataLoader(
-        ds, batch_size=args.batch, shuffle=True,
+        ds, batch_size=args.batch, shuffle=shuffle,
         num_workers=getattr(args, "num_workers", 0),
         collate_fn=_collate, drop_last=True, persistent_workers=False,
     )
