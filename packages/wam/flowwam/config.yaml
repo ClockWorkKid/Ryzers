@@ -43,7 +43,9 @@ environment_variables:
 - 'FLOWWAM_CACHE=${FLOWWAM_CACHE:-}'
 - 'FLOWWAM_COMPILE=${FLOWWAM_COMPILE:-}'
 
-docker_extra_run_flags: "--shm-size=16g"
+# Large FlowWAM ckpt + Wan2.2 base (mmap) with vram-managed layer streaming opens many fds;
+# raise nofile above the docker default (1024) so model load does not fail with EMFILE.
+docker_extra_run_flags: "--shm-size=16g --ulimit nofile=1048576:1048576"
 
 volume_mappings:
 - "$PWD/workspace/flowwam/outputs:/outputs"

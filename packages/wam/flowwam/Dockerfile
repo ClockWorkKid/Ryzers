@@ -61,6 +61,11 @@ RUN PIP_CONSTRAINT=/opt/flowwam-constraints.txt pip install --no-cache-dir \
       "websockets>=12.0" "msgpack>=1.0" "msgpack-numpy>=0.4.8" \
       "sentencepiece>=0.2" "tiktoken>=0.7"
 
+# Sim policy-factory adapter (robotwin) wrapping the dual-stream flow-action model. Imported
+# only when driving the robotwin sim base via POLICY_FACTORY=flowwam_robotwin_policy:build_policy
+# (interactive demo); harmless (unused) otherwise.
+COPY adapters/ /opt/flowwam-adapters/
+
 # Import + env sign-of-life at build time (fails the build early if the layer is broken).
 RUN python -c "import torch; assert torch.version.hip, 'torch is not a ROCm build: '+torch.__version__; \
 from diffsynth.pipelines.wan_video_new import WanVideoPipeline, ModelConfig; \
