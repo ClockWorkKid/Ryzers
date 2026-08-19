@@ -52,7 +52,8 @@ RUN python /ryzers/scripts/strip_cuda_torch.py /repos/ahawam/pyproject.toml && \
     PIP_CONSTRAINT=/opt/ahawam-constraints.txt pip install --no-cache-dir -e /repos/ahawam && \
     pip freeze | grep -iE "^(torch|torchvision|torchcodec|numpy)==" > /opt/ahawam-constraints.txt && \
     PIP_CONSTRAINT=/opt/ahawam-constraints.txt pip install --no-cache-dir \
-      "hf-transfer>=0.1.8" "sentencepiece>=0.2" "matplotlib>=3.8" "opencv-python-headless"
+      "hf-transfer>=0.1.8" "sentencepiece>=0.2" "matplotlib>=3.8" "opencv-python-headless" \
+      "imageio>=2.34" "imageio-ffmpeg>=0.5"
 
 # Sim Policy adapter (sim_robotwin.Policy wrapping the AHA-WAM RoboTwin deploy plugin). Only
 # imported when driving the simulation/robotwin base via

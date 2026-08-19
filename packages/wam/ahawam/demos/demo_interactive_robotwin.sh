@@ -10,6 +10,7 @@
 # RoboTwin sim assets + checkpoint into the mounted caches. Defaults to AHA-WAM-Flash
 # (1 diffusion step) for a responsive demo; set CKPT=.../robotwin_ahawam.pt for the base model.
 set -euo pipefail
+ulimit -n 65536 2>/dev/null || true  # SAPIEN/RoboTwin open many fds; raise soft nofile (hard=524288)
 if [ ! -d /opt/sim/sim_robotwin ]; then
   echo "ERROR: simulation/robotwin base not found (no /opt/sim/sim_robotwin)." >&2
   echo "       Build the chain:  ryzers build robotwin ahawam" >&2

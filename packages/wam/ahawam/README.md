@@ -1,15 +1,15 @@
 ### AHA-WAM
 
-This package runs [AHA-WAM](https://github.com/serene-sivy/AHA-WAM) on AMD Ryzen AI Max+ 395 (Strix Halo, gfx1151) under ROCm 7.2.2 (7.14 when chained on the RoboTwin base). AHA-WAM is an asynchronous Wan2.2-TI2V-5B world-action model (umt5-xxl text encoder, Wan VAE, and a joint video/action DiT) that splits inference into a slow observation-guided video-context prefill (the planner) and a fast action-DiT chunk that reuses the prefilled KV cache (the executor), so the two phases can run at different rates. It is a slim policy layer that ships no simulator: it runs standalone on the plain base for the non-sim demos, or chains on top of the RoboTwin 2.0 base for closed-loop rollouts. This package mirrors `packages/wam/fastwam`; the build applies a lossless, default-on efficiency patch (batched chunk KV-editor plus a static text-embedding cache) that can be disabled with `AHAWAM_KV_EDITOR_FAST=0` / `AHAWAM_CACHE_TEXT_CONTEXT=0`.
+This package runs [AHA-WAM](https://github.com/serene-sivy/AHA-WAM) on AMD Ryzen AI Max+ 395 (Strix Halo, gfx1151) under ROCm 7.14. AHA-WAM is a direct successor of FastWAM: an asynchronous Wan2.2-TI2V-5B world-action model (umt5-xxl text encoder, Wan VAE, and a joint video/action DiT) that splits inference into a slow observation-guided video-context prefill (the planner) and a fast action-DiT chunk that reuses the prefilled KV cache (the executor), so the two phases run at different rates. It ships no simulator: it runs standalone on the plain base for video imagination, or chains on top of the RoboTwin 2.0 simulator base for interactive and closed-loop rollouts.
 
 ### Build
 
 ```sh
-ryzers build ahawam --name ahawam                        # model layer: non-sim demos (smoke / open-loop)
+ryzers build ahawam --name ahawam                        # model layer: standalone demos (smoke / video imagination)
 ryzers run --name ahawam                                 # test.py: ROCm torch + GPU + deps check
 ```
 
-For closed-loop rollouts, chain the model on the RoboTwin 2.0 simulator base.
+For interactive and closed-loop rollouts, chain the model on the RoboTwin 2.0 simulator base.
 
 ```sh
 ryzers build robotwin ahawam --name ahawam-robotwin      # chain the model on the RoboTwin base
@@ -22,50 +22,50 @@ The ~12 GB Wan2.2 base weights and the RoboTwin 2.0 checkpoint are fetched on th
 ryzers run --name ahawam /ryzers/scripts/download_checkpoints.sh robotwin   # RoboTwin 2.0 ckpt
 ```
 
-### Model smoke and open-loop replay
+### Interactive RoboTwin 2.0
 
-These run on the standalone image. The smoke demo builds the real 13.74 B-parameter model, loads the
-checkpoint and runs one end-to-end two-phase action prediction; open-loop replay feeds ground-truth
-RoboTwin 2.0 observations and overlays the predicted action chunks against ground truth.
+Drive the robot live in a browser. The interactive server streams the SAPIEN view over
+HTTP/MJPEG and prints its `http://localhost:PORT` URL; view it at `http://localhost:PORT` via
+`ssh -L PORT:localhost:PORT <host>`. The `_rt.sh` variant decouples execution from planning so
+the browser sees the two-phase planner latency (the arms hold while the model thinks, then
+resume when the action buffer refills). Both default to AHA-WAM-Flash for a responsive demo.
 
 ```sh
-ryzers run --name ahawam /ryzers/demos/demo_smoke.sh                          # load ckpt + one two-phase infer
-NUM_EPISODES=6 ryzers run --name ahawam /ryzers/demos/demo_openloop.sh        # GT replay + MAE overlays
+ryzers run --name ahawam-robotwin /ryzers/demos/demo_interactive_robotwin.sh     # live browser control
+ryzers run --name ahawam-robotwin /ryzers/demos/demo_interactive_robotwin_rt.sh  # real-time (visible planner holds)
 ```
-
-Over 6 episodes the predicted chunks track ground truth closely (mean normalized MAE 0.0089, raw-unit
-MAE 0.0056).
-
-<p align="center">
-  <img src="assets/openloop_robotwin_ep00.png" width="480">
-  <br>
-  <img src="assets/openloop_robotwin_per_dim_mae.png" width="480">
-  <br><em>Open-loop RoboTwin replay: predicted vs ground-truth chunk (top), per-dimension MAE (bottom).</em>
-</p>
 
 ### Closed-loop RoboTwin 2.0
 
 RoboTwin 2.0 runs under the SAPIEN Vulkan renderer; the two phases are scheduled with
-`chunks_per_video_prefill`. Each task runs RoboTwin's own `eval_policy.py` against the `ahawam_policy`
-plugin and writes a success rate plus per-episode videos.
+`chunks_per_video_prefill`. Each task runs RoboTwin's own `eval_policy.py` against the
+`ahawam_policy` plugin and writes a success rate plus per-episode videos.
 
 ```sh
-TASKS="click_bell lift_pot" NUM_EPISODES=3 \
-  ryzers run --name ahawam-robotwin /ryzers/demos/demo_closedloop_robotwin.sh # batch rollouts + success rate
+TASKS="click_bell lift_pot" NUM_EPISODES=10 \
+  ryzers run --name ahawam-robotwin /ryzers/demos/demo_closedloop_robotwin.sh   # batch rollouts + success rate
 ```
-
-On this run `click_bell` scored 3/3 (100%) and `lift_pot` 1/3.
 
 <p align="center">
   <img src="assets/closedloop_robotwin_click_bell.gif" width="400">
   <br>
-  <img src="assets/closedloop_robotwin_lift_pot.gif" width="320">
+  <img src="assets/closedloop_robotwin_lift_pot.gif" width="400">
   <br><em>Closed-loop RoboTwin rollouts: click bell (top), lift pot (bottom).</em>
 </p>
 
-Additional demos are included in `demos/`: two-phase latency profiling (`demo_latency.sh`), async
-real-time serving (`demo_async_rt.sh`), and live browser control (`demo_interactive_robotwin.sh`,
-`demo_interactive_robotwin_rt.sh`).
+### Video imagination
+
+The world-model video branch imagines the future clip from a ground-truth start frame and
+instruction (ground truth left, imagined right). This runs on the standalone image.
+
+```sh
+DATASET=robotwin ryzers run --name ahawam /ryzers/demos/demo_videogen.sh
+```
+
+<p align="center">
+  <img src="assets/imagination_robotwin.gif" width="480">
+  <br><em>RoboTwin: ground truth (left) vs imagined future (right).</em>
+</p>
 
 ### References
 

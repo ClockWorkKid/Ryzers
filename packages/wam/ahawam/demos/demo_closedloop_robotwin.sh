@@ -11,6 +11,7 @@
 #   ryzers run /ryzers/demos/demo_closedloop_robotwin.sh
 #   TASKS="click_bell lift_pot" NUM_EPISODES=10 ryzers run /ryzers/demos/demo_closedloop_robotwin.sh
 set -uo pipefail
+ulimit -n 65536 2>/dev/null || true  # SAPIEN/RoboTwin open many fds; raise soft nofile (hard=524288)
 if [ ! -d /opt/RoboTwin ]; then
   echo "ERROR: simulation/robotwin base not found (no /opt/RoboTwin)." >&2
   echo "       Build the chain:  ryzers build robotwin ahawam" >&2
@@ -23,6 +24,7 @@ CHUNKS_PER_VIDEO_PREFILL="${CHUNKS_PER_VIDEO_PREFILL:-2}"
 NUM_INFERENCE_STEPS="${NUM_INFERENCE_STEPS:-10}"
 REL=/models/ahawam_release
 export PYTHONPATH="/repos/ahawam/src:/repos/ahawam:/repos/ahawam/experiments/robotwin:/opt/RoboTwin:/opt/sim:${PYTHONPATH:-}"
+export PYTORCH_HIP_ALLOC_CONF="${PYTORCH_HIP_ALLOC_CONF:-expandable_segments:True}"
 
 CKPT="${CKPT:-$REL/robotwin_ahawam.pt}"
 STATS="${DATASET_STATS:-$REL/dataset_stats.json}"
@@ -47,5 +49,11 @@ for TASK in $TASKS; do
     EVALUATION.dataset_stats_path=$STATS \
     2>&1 | grep -viE 'svulkan2|Failed to initialize denoiser|cudaErrorInsufficientDriver' \
     || echo "TASK $TASK returned nonzero"
+  # eval writes to the ephemeral repo dir; copy rollout videos + results to the
+  # mounted artifacts volume so they survive the --rm container.
+  if [ -d /repos/ahawam/evaluate_results ]; then
+    mkdir -p "${OUT_DIR:-/outputs}/robotwin_eval"
+    cp -ra /repos/ahawam/evaluate_results/. "${OUT_DIR:-/outputs}/robotwin_eval/" 2>/dev/null || true
+  fi
 done
 echo "PASS: RoboTwin closed-loop suite complete"
