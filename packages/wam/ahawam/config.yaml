@@ -1,0 +1,66 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# init_image omitted: ryzers defaults to the ROCm 7.2.2 base
+# (rocm/pytorch torch 2.10.0), which already ships the ROCm torch stack.
+
+build_arguments:
+- "AHAWAM_COMMIT=69076f6206518554477be5639deb016eee03a9d6"
+
+gpu_support: true
+x11_display: false
+
+environment_variables:
+- "HSA_OVERRIDE_GFX_VERSION=11.5.1"
+- "HF_HOME=/root/.cache/huggingface"
+- 'HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET:-1}'
+- 'HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER:-0}'
+- 'HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT:-60}'
+- "HF_HUB_DISABLE_TELEMETRY=1"
+- "TOKENIZERS_PARALLELISM=false"
+- "DIFFSYNTH_MODEL_BASE_PATH=/models/diffsynth"
+- 'DIFFSYNTH_DOWNLOAD_SOURCE=${DIFFSYNTH_DOWNLOAD_SOURCE:-modelscope}'
+- "MUJOCO_GL=egl"
+- "PYOPENGL_PLATFORM=egl"
+- "TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1"
+- "TORCH_BLAS_PREFER_HIPBLASLT=0"
+- "OUT_DIR=/outputs"
+# Per-demo knobs (override from the host: VAR=... ryzers run /ryzers/demos/demo_*.sh).
+- 'HF_TOKEN=${HF_TOKEN:-}'
+- 'WHICH=${WHICH:-}'
+- 'NUM_STEPS=${NUM_STEPS:-}'
+- 'SEED=${SEED:-}'
+- 'TAG=${TAG:-}'
+- 'NUM_EPISODES=${NUM_EPISODES:-}'
+- 'CKPT=${CKPT:-}'
+- 'DATASET_STATS=${DATASET_STATS:-}'
+- 'DATASET_DIR=${DATASET_DIR:-}'
+- 'MIXED_PRECISION=${MIXED_PRECISION:-}'
+- 'NUM_INFERENCE_STEPS=${NUM_INFERENCE_STEPS:-}'
+- 'CHUNKS_PER_VIDEO_PREFILL=${CHUNKS_PER_VIDEO_PREFILL:-}'
+# Async real-time serving demo knobs (deploy/ TCP server + async dummy client).
+- 'PORT=${PORT:-}'
+- 'INSTRUCTION=${INSTRUCTION:-}'
+- 'NUM_ACTION_REQUESTS=${NUM_ACTION_REQUESTS:-}'
+- 'ACTION_RATE=${ACTION_RATE:-}'
+- 'IMAGE_FPS=${IMAGE_FPS:-}'
+- 'PREFILL_WAIT=${PREFILL_WAIT:-}'
+# Closed-loop RoboTwin demo knobs (require the simulation/robotwin base).
+- 'TASK=${TASK:-}'
+- 'TASKS=${TASKS:-}'
+- 'TASK_CONFIG=${TASK_CONFIG:-}'
+# Interactive / real-time RoboTwin demo knobs (require the simulation/robotwin base).
+- 'POLICY_FACTORY=${POLICY_FACTORY:-}'
+- 'MAX_STEPS=${MAX_STEPS:-}'
+- 'VIEW_RES=${VIEW_RES:-}'
+- 'VIDEO_RES=${VIDEO_RES:-}'
+- 'REPLAN_STEPS=${REPLAN_STEPS:-}'
+- 'ACTION_HORIZON=${ACTION_HORIZON:-}'
+# Efficiency toggles for the Strix-Halo patch (both default on; set 0 to disable).
+- 'AHAWAM_KV_EDITOR_FAST=${AHAWAM_KV_EDITOR_FAST:-}'
+- 'AHAWAM_CACHE_TEXT_CONTEXT=${AHAWAM_CACHE_TEXT_CONTEXT:-}'
+
+volume_mappings:
+- "$PWD/workspace/ahawam/outputs:/outputs"
+- "$PWD/workspace/ahawam/models:/models"
+- "$PWD/workspace/.cache/huggingface:/root/.cache/huggingface"

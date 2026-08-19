@@ -1,0 +1,255 @@
+diff --git a/deploy/server/ahawam_policy.py b/deploy/server/ahawam_policy.py
+index 37ec54e..8511ba6 100644
+--- a/deploy/server/ahawam_policy.py
++++ b/deploy/server/ahawam_policy.py
+@@ -178,6 +178,14 @@ class AHAWAMPolicy:
+             raise ValueError("action_horizon must be at least one action chunk.")
+ 
+         self._episode_prefilled = False
++        # Cache the static instruction text embedding across prefills so umt5 runs
++        # only when the instruction changes (planner text-encode is ~160 ms/prefill).
++        self._cache_text_context = str(
++            os.environ.get("AHAWAM_CACHE_TEXT_CONTEXT", "1")
++        ) not in ("0", "false", "False")
++        self._cached_prompt: Optional[str] = None
++        self._cached_context: Optional[torch.Tensor] = None
++        self._cached_context_mask: Optional[torch.Tensor] = None
+         self.video_height = int(cfg.get("video_height", 384))
+         self.video_width = int(cfg.get("video_width", 320))
+ 
+@@ -253,7 +261,6 @@ class AHAWAMPolicy:
+ 
+     def _prefill_episode(self, *, prompt: str, image_tensor: torch.Tensor) -> None:
+         video_kwargs = {
+-            "prompt": prompt,
+             "input_image": image_tensor,
+             "action_horizon": self.action_horizon,
+             "negative_prompt": self.negative_prompt,
+@@ -263,6 +270,17 @@ class AHAWAMPolicy:
+             "tiled": self.tiled,
+             "phase": "video",
+         }
++        if self._cache_text_context:
++            if prompt != self._cached_prompt or self._cached_context is None:
++                with torch.no_grad():
++                    ctx, ctx_mask = self.model.encode_prompt(prompt)
++                self._cached_context = ctx
++                self._cached_context_mask = ctx_mask
++                self._cached_prompt = prompt
++            video_kwargs["context"] = self._cached_context
++            video_kwargs["context_mask"] = self._cached_context_mask
++        else:
++            video_kwargs["prompt"] = prompt
+         self.model.infer_action(**video_kwargs)
+         self._episode_prefilled = True
+ 
+diff --git a/experiments/robotwin/ahawam_policy/deploy_policy.py b/experiments/robotwin/ahawam_policy/deploy_policy.py
+index 36d2919..c2158c8 100644
+--- a/experiments/robotwin/ahawam_policy/deploy_policy.py
++++ b/experiments/robotwin/ahawam_policy/deploy_policy.py
+@@ -205,6 +205,16 @@ class WorldActionRobotWinPolicy:
+         self.episode_count = 0
+         self.step_count = 0
+         self._episode_prefilled = False
++        # Opt #3: cache the static instruction text embedding across prefills so umt5 runs
++        # only when the instruction changes (planner text-encode is ~160 ms/prefill and the
++        # instruction is constant within a RoboTwin task). Lossless: the same context tensor
++        # is reused. Disable with AHAWAM_CACHE_TEXT_CONTEXT=0.
++        self._cache_text_context = str(
++            os.environ.get("AHAWAM_CACHE_TEXT_CONTEXT", "1")
++        ).strip().lower() not in ("0", "false", "no")
++        self._cached_prompt: Optional[str] = None
++        self._cached_context: Optional[torch.Tensor] = None
++        self._cached_context_mask: Optional[torch.Tensor] = None
+         self._timing_rollout = {
+             "infer_s": 0.0,
+             "sim_s": 0.0,
+@@ -302,7 +312,6 @@ class WorldActionRobotWinPolicy:
+         image_tensor: torch.Tensor,
+     ) -> None:
+         video_kwargs = {
+-            "prompt": prompt,
+             "input_image": image_tensor,
+             "action_horizon": self.video_prefill_action_horizon,
+             "negative_prompt": self.negative_prompt,
+@@ -312,6 +321,17 @@ class WorldActionRobotWinPolicy:
+             "tiled": self.tiled,
+             "phase": "video",
+         }
++        if self._cache_text_context:
++            if prompt != self._cached_prompt or self._cached_context is None:
++                with torch.no_grad():
++                    ctx, ctx_mask = self.model.encode_prompt(prompt)
++                self._cached_context = ctx
++                self._cached_context_mask = ctx_mask
++                self._cached_prompt = prompt
++            video_kwargs["context"] = self._cached_context
++            video_kwargs["context_mask"] = self._cached_context_mask
++        else:
++            video_kwargs["prompt"] = prompt
+         prefill_t0 = time.perf_counter() if self.timing_enabled else 0.0
+         self.model.infer_action(**video_kwargs)
+         if self.timing_enabled:
+diff --git a/src/ahawam/models/wan22/mot.py b/src/ahawam/models/wan22/mot.py
+index b67a034..7265b79 100644
+--- a/src/ahawam/models/wan22/mot.py
++++ b/src/ahawam/models/wan22/mot.py
+@@ -2,8 +2,11 @@ from __future__ import annotations
+ 
+ from typing import Any, Dict, Optional, cast
+ 
++import os
++
+ import torch
+ import torch.nn as nn
++import torch.nn.functional as F
+ import torch.utils.checkpoint as torch_checkpoint
+ 
+ from .wan_video_dit import flash_attention, modulate, rope_apply
+@@ -143,6 +146,116 @@ class LayerwiseChunkKVCacheEditor(nn.Module):
+             "delta_v": delta_v,
+         }
+ 
++    def _ensure_stacked_weights(
++        self, *, device: torch.device, dtype: torch.dtype
++    ) -> dict[str, torch.Tensor]:
++        """Lazily stack the per-layer proj weights into [L, ...] tensors.
++
++        Enables the batched fast path to replace the ~num_layers tiny per-layer
++        GEMMs/einsums with layer-batched ops (fewer kernel launches). Cached and
++        rebuilt only if the target device/dtype changes.
++        """
++        cache = getattr(self, "_stacked_cache", None)
++        if (
++            cache is not None
++            and cache["device"] == device
++            and cache["dtype"] == dtype
++        ):
++            return cache
++        with torch.no_grad():
++            qln = [cast(nn.LayerNorm, self.layer_query_proj[l][0]) for l in range(self.num_layers)]
++            qlin = [cast(nn.Linear, self.layer_query_proj[l][1]) for l in range(self.num_layers)]
++            dln = [cast(nn.LayerNorm, self.layer_delta_proj[l][0]) for l in range(self.num_layers)]
++            d1 = [cast(nn.Linear, self.layer_delta_proj[l][1]) for l in range(self.num_layers)]
++            d2 = [cast(nn.Linear, self.layer_delta_proj[l][3]) for l in range(self.num_layers)]
++
++            def stack(mods, attr):
++                return torch.stack([getattr(m, attr).detach() for m in mods]).to(
++                    device=device, dtype=dtype
++                )
++
++            cache = {
++                "device": device,
++                "dtype": dtype,
++                "qln_w": stack(qln, "weight"),   # [L, D]
++                "qln_b": stack(qln, "bias"),     # [L, D]
++                "qlin_w": stack(qlin, "weight"), # [L, A, D]
++                "qlin_b": stack(qlin, "bias"),   # [L, A]
++                "dln_w": stack(dln, "weight"),   # [L, A]
++                "dln_b": stack(dln, "bias"),     # [L, A]
++                "d1_w": stack(d1, "weight"),     # [L, A, A]
++                "d1_b": stack(d1, "bias"),       # [L, A]
++                "d2_w": stack(d2, "weight"),     # [L, 2A, A]
++                "d2_b": stack(d2, "bias"),       # [L, 2A]
++                "qln_eps": float(qln[0].eps),
++                "dln_eps": float(dln[0].eps),
++            }
++        self._stacked_cache = cache
++        return cache
++
++    def build_all_layers_updated_cache(
++        self,
++        *,
++        chunk_queries: torch.Tensor,          # [B, N, Q, query_dim] (shared across layers)
++        first_frame_keys: torch.Tensor,       # [L, B, S, A]
++        first_frame_values: torch.Tensor,     # [L, B, S, A]
++    ) -> dict[str, torch.Tensor]:
++        """Layer-batched equivalent of ``build_layer_updated_cache`` for all layers.
++
++        Mathematically identical to looping ``build_layer_updated_cache`` over
++        every layer, but computed as a handful of layer-batched einsums instead of
++        ``num_layers`` separate launches. Returns k/v of shape [L, B, N, S, A].
++        """
++        L = self.num_layers
++        A = self.attn_hidden_dim
++        H, Dh = self.num_heads, self.head_dim
++        w = self._ensure_stacked_weights(
++            device=first_frame_keys.device, dtype=first_frame_keys.dtype
++        )
++        cq = chunk_queries.to(device=first_frame_keys.device, dtype=first_frame_keys.dtype)
++        B, N, Qn, _ = cq.shape
++        S = int(first_frame_keys.shape[2])
++        scale = float(Dh) ** 0.5
++
++        # ---- query projection (LN + Linear) per layer; input shared across L ----
++        qn = F.layer_norm(cq, (cq.shape[-1],), eps=w["qln_eps"])          # [B,N,Q,D]
++        qn = qn.unsqueeze(0) * w["qln_w"].view(L, 1, 1, 1, -1) + w["qln_b"].view(L, 1, 1, 1, -1)
++        query = torch.einsum("lbnqd,lad->lbnqa", qn, w["qlin_w"]) + w["qlin_b"].view(L, 1, 1, 1, A)
++        query = query.view(L, B, N, Qn, H, Dh)
++
++        k0 = first_frame_keys.view(L, B, S, H, Dh)
++        v0 = first_frame_values.view(L, B, S, H, Dh)
++
++        scores = torch.einsum("lbnqhd,lbshd->lbhnqs", query, k0) / scale
++        weights = torch.softmax(scores, dim=-1)
++        routed = torch.einsum("lbhnqs,lbshd->lbnqhd", weights, v0)
++
++        token_scores = torch.einsum("lbshd,lbnqhd->lbhnsq", k0, routed) / scale
++        token_weights = torch.softmax(token_scores, dim=-1)
++        decoded = torch.einsum("lbhnsq,lbnqhd->lbnshd", token_weights, routed).reshape(
++            L, B, N, S, A
++        )
++
++        # ---- delta MLP (LN + Linear + GELU + Linear) per layer ----
++        dn = F.layer_norm(decoded, (A,), eps=w["dln_eps"])
++        dn = dn * w["dln_w"].view(L, 1, 1, 1, A) + w["dln_b"].view(L, 1, 1, 1, A)
++        h1 = torch.einsum("lbnsa,loa->lbnso", dn, w["d1_w"]) + w["d1_b"].view(L, 1, 1, 1, A)
++        h1 = F.gelu(h1)
++        delta = torch.einsum("lbnso,lco->lbnsc", h1, w["d2_w"]) + w["d2_b"].view(L, 1, 1, 1, 2 * A)
++        delta_k, delta_v = delta.chunk(2, dim=-1)
++
++        base_k = first_frame_keys.unsqueeze(2).expand(L, B, N, S, A)
++        base_v = first_frame_values.unsqueeze(2).expand(L, B, N, S, A)
++        if self.use_delta_gate:
++            gate = torch.sigmoid(self.delta_gate).to(device=delta.device, dtype=delta.dtype)
++            gate = gate.view(L, 1, 1, 1, 1)
++            updated_k = base_k + gate * delta_k
++            updated_v = base_v + gate * delta_v
++        else:
++            updated_k = base_k + delta_k
++            updated_v = base_v + delta_v
++        return {"k": updated_k, "v": updated_v}
++
+ 
+ class MoT(nn.Module):
+     def __init__(
+@@ -371,10 +484,27 @@ class MoT(nn.Module):
+                 f"`chunk_index` out of range: {chunk_index} for {chunk_queries.shape[1]} chunks."
+             )
+         one_chunk_queries = chunk_queries[:, chunk_index : chunk_index + 1]
++        vtpf = int(video_tokens_per_frame)
++        use_fast = os.environ.get("AHAWAM_KV_EDITOR_FAST", "1") == "1" and hasattr(
++            editor, "build_all_layers_updated_cache"
++        )
++        if use_fast:
++            first_k = torch.stack([lc["k"][:, :vtpf] for lc in video_kv_cache])  # [L,B,S,A]
++            first_v = torch.stack([lc["v"][:, :vtpf] for lc in video_kv_cache])
++            updated = editor.build_all_layers_updated_cache(
++                chunk_queries=one_chunk_queries,
++                first_frame_keys=first_k,
++                first_frame_values=first_v,
++            )
++            uk, uv = updated["k"], updated["v"]  # [L, B, N, S, A]
++            return [
++                {"k": uk[layer_idx, :, 0], "v": uv[layer_idx, :, 0]}
++                for layer_idx in range(self.num_layers)
++            ]
+         updated_cache: list[dict[str, torch.Tensor]] = []
+         for layer_idx, layer_cache in enumerate(video_kv_cache):
+-            first_k = layer_cache["k"][:, : int(video_tokens_per_frame)]
+-            first_v = layer_cache["v"][:, : int(video_tokens_per_frame)]
++            first_k = layer_cache["k"][:, :vtpf]
++            first_v = layer_cache["v"][:, :vtpf]
+             updated = editor.build_layer_updated_cache(
+                 layer_idx=layer_idx,
+                 chunk_queries=one_chunk_queries,
