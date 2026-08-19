@@ -1,0 +1,51 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# init_image omitted: FlowWAM is a model layer meant to chain on a base. Because it REQUIRES
+# SAPIEN robot rendering + RoboTwin embodiments, chain it on the robotwin sim base (ROCm 7.14):
+#   ryzers build robotwin flowwam --name flowwam-robotwin
+
+build_arguments:
+- "FLOWWAM_COMMIT=f06fa46042e97738c6619c868f1097be6749d48d"
+
+gpu_support: true
+x11_display: false          # SAPIEN renders headless via Vulkan/EGL (provided by robotwin base)
+
+environment_variables:
+- "HSA_OVERRIDE_GFX_VERSION=11.5.1"
+- "HF_HOME=/root/.cache/huggingface"
+- 'HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET:-1}'
+- 'HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER:-0}'
+- 'HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT:-60}'
+- "HF_HUB_DISABLE_TELEMETRY=1"
+- "TOKENIZERS_PARALLELISM=false"
+# FlowWAM's build_pipeline loads Wan2.2 via DiffSynth ModelConfig(local_model_path=...); point it
+# at the mounted models dir so the large Wan2.2-TI2V-5B base is fetched/reused once on the host.
+- "FLOWWAM_MODEL_DIR=/models/flowwam"
+- "TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1"
+- "TORCH_BLAS_PREFER_HIPBLASLT=0"
+- "PYTORCH_HIP_ALLOC_CONF=expandable_segments:True"
+- "OUT_DIR=/outputs"
+# Per-demo knobs (override from the host: VAR=... ryzers run /ryzers/demos/demo_*.sh).
+- 'HF_TOKEN=${HF_TOKEN:-}'
+- 'SEED=${SEED:-}'
+- 'TAG=${TAG:-}'
+# Closed-loop RoboTwin knobs (require the simulation/robotwin base).
+- 'TASK=${TASK:-}'
+- 'TASK_CONFIG=${TASK_CONFIG:-}'
+- 'NUM_EPISODES=${NUM_EPISODES:-}'
+- 'PORT=${PORT:-}'
+- 'EXECUTE_WINDOW=${EXECUTE_WINDOW:-}'
+- 'VIDEO_INFERENCE_STEPS=${VIDEO_INFERENCE_STEPS:-}'
+- 'ACTION_INFERENCE_STEPS=${ACTION_INFERENCE_STEPS:-}'
+# FlowWAM runtime-optimization kill-switches (default ON; see demos/demo_closedloop_robotwin.sh).
+- 'FLOWWAM_OPT=${FLOWWAM_OPT:-}'
+- 'FLOWWAM_CACHE=${FLOWWAM_CACHE:-}'
+- 'FLOWWAM_COMPILE=${FLOWWAM_COMPILE:-}'
+
+docker_extra_run_flags: "--shm-size=16g"
+
+volume_mappings:
+- "$PWD/workspace/flowwam/outputs:/outputs"
+- "$PWD/workspace/flowwam/models:/models"
+- "$PWD/workspace/.cache/huggingface:/root/.cache/huggingface"
