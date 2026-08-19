@@ -1,0 +1,38 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# init_image omitted: ryzers defaults to the ROCm 7.2.2 base
+# (rocm/pytorch torch 2.10.0), which already ships the ROCm torch stack.
+# This is a model-agnostic simulator base; chain a policy on top with
+#   ryzers build simulation/robocasa <policy>
+
+gpu_support: true
+x11_display: false
+
+environment_variables:
+- "HSA_OVERRIDE_GFX_VERSION=11.5.1"
+- "MUJOCO_GL=egl"
+- "PYOPENGL_PLATFORM=egl"
+- "TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1"
+- "TORCH_BLAS_PREFER_HIPBLASLT=0"
+# Distinct container target so this base's outputs mount does not collide with a policy
+# layer's /outputs when chained (ryzers concatenates volume mappings).
+- "OUT_DIR=/sim_outputs"
+# RoboCasa kitchen assets live on the mounted volume (fetched at runtime, not baked).
+- "ROBOCASA_ASSETS_DIR=/models/robocasa_assets"
+# Sim/harness knobs (override from the host: VAR=... ryzers run /ryzers/demos/demo_*.sh).
+- 'TASK=${TASK:-}'
+- 'SEED=${SEED:-}'
+- 'STEPS=${STEPS:-}'
+- 'PORT=${PORT:-}'
+- 'VIEW_RES=${VIEW_RES:-}'
+- 'VIDEO_RES=${VIDEO_RES:-}'
+- 'MAX_STEPS=${MAX_STEPS:-}'
+- 'RT_HZ=${RT_HZ:-}'
+- 'RT_MAX_STEPS=${RT_MAX_STEPS:-}'
+# Policy selection: module:function returning a sim_robocasa.Policy (default RandomPolicy).
+- 'POLICY_FACTORY=${POLICY_FACTORY:-}'
+
+volume_mappings:
+- "$PWD/workspace/simulation-robocasa/outputs:/sim_outputs"
+- "$PWD/workspace/simulation-robocasa/assets:/models/robocasa_assets"
