@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 #
 # Model-agnostic RoboTwin 2.0 simulator base for AMD Strix Halo (gfx1151): SAPIEN (offscreen
-# Vulkan RT) + mplib stack + sim_robotwin harness. curobo (CUDA/Warp, no ROCm) -> mplib; OIDN
-# off via robotwin_rocm.patch; pytorch3d built from source for gfx1151 (point-cloud ops).
+# Vulkan RT) + mplib stack + sim_robotwin harness. curobo (CUDA/Warp, no ROCm) -> mplib via
+# robotwin_rocm.patch; pytorch3d built from source for gfx1151 (point-cloud ops).
 # RoboTwin de-vendored (upstream @ pin); assets fetched at runtime, never baked.
 
 ARG BASE_IMAGE
@@ -48,7 +48,7 @@ RUN PIP_CONSTRAINT=/opt/torch-constraints.txt pip install --no-cache-dir ninja f
     rm -rf /tmp/pytorch3d && \
     python -c "import os, glob, pytorch3d; so=glob.glob(os.path.dirname(pytorch3d.__file__)+'/_C*.so'); assert so, 'pytorch3d _C extension not built'; print('pytorch3d', pytorch3d.__version__, 'gfx1151 _C:', os.path.basename(so[0]))"
 
-# Clone upstream RoboTwin @ pin, then apply ROCm patch (curobo->mplib, OIDN off) + harness adaptations.
+# Clone upstream RoboTwin @ pin, then apply the patch (FastWAM eval harness + curobo->mplib; see its header).
 ARG RT_COMMIT=bf44be51cf5717a5595ce59447f2cf5263d2aa95
 COPY scripts/patches/robotwin_rocm.patch /tmp/robotwin_rocm.patch
 RUN git clone https://github.com/RoboTwin-Platform/RoboTwin /opt/RoboTwin && \

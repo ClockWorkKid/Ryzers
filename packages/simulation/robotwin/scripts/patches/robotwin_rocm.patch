@@ -1,46 +1,30 @@
+RoboTwin @ bf44be51 for the ryzers RoboTwin base. Two parts:
+1. FastWAM's vendored eval harness (FastWAM third_party/RoboTwin, same RoboTwin pin):
+   script/eval_policy.py (eval_num_episodes, eval_output_dir, result naming) and the
+   matching wrist-camera eval video in envs/_base_task.py.
+2. ROCm: curobo is CUDA-only, so CuroboPlanner is optional and both arms use mplib
+   (planner.py, robot.py); the expert seed pre-check needs curobo's plan_batch, so it is
+   skipped (eval_policy.py); open3d is optional (camera.py, save_file.py).
+
 diff --git a/envs/_base_task.py b/envs/_base_task.py
-index 982e6ec..49897c0 100644
+index 982e6ec..67979f4 100644
 --- a/envs/_base_task.py
 +++ b/envs/_base_task.py
-@@ -38,6 +38,54 @@ class Base_Task(gym.Env):
+@@ -38,6 +38,30 @@ class Base_Task(gym.Env):
      def __init__(self):
          pass
  
 +    def _get_eval_video_frame(self):
-+        # Render the current scene live for every eval frame so all panels are
-+        # continuous during policy execution. The policy only refreshes
-+        # self.now_obs at replan boundaries, so reading it here made the head and
-+        # wrist panels jump from keyframe to keyframe (only the live-rendered
-+        # observer stayed smooth).
-+        self._update_render()
-+        self.cameras.update_picture()
-+        rgb = self.cameras.get_rgb()
-+        head_rgb = rgb["head_camera"]["rgb"]
++        obs = self.now_obs["observation"]
++        head_rgb = obs["head_camera"]["rgb"]
 +
-+        if "left_camera" not in rgb or "right_camera" not in rgb:
++        if "left_camera" not in obs or "right_camera" not in obs:
 +            return head_rgb
 +
-+        left_rgb = rgb["left_camera"]["rgb"]
-+        right_rgb = rgb["right_camera"]["rgb"]
++        left_rgb = obs["left_camera"]["rgb"]
++        right_rgb = obs["right_camera"]["rgb"]
 +        bottom_rgb = np.concatenate([left_rgb, right_rgb], axis=1)
-+
-+        # Top row = [head | third-person observer]. The observer is a sim-only
-+        # camera (absent from the dataset / policy input); rendering it here fills
-+        # the quadrant that is otherwise zero-padded, since the head cam is
-+        # narrower than the two wrist cams placed side by side.
-+        top_rgb = head_rgb
-+        try:
-+            h, w = head_rgb.shape[:2]
-+            observer_rgb = np.asarray(self.cameras.get_observer_rgb())[:, :, :3]
-+            if observer_rgb.shape[:2] != (h, w):
-+                ys = np.linspace(0, observer_rgb.shape[0] - 1, h).astype(np.int64)
-+                xs = np.linspace(0, observer_rgb.shape[1] - 1, w).astype(np.int64)
-+                observer_rgb = observer_rgb[ys][:, xs]
-+            top_rgb = np.concatenate([head_rgb, observer_rgb], axis=1)
-+        except Exception:
-+            top_rgb = head_rgb
-+
-+        target_w = max(top_rgb.shape[1], bottom_rgb.shape[1])
++        target_w = max(head_rgb.shape[1], bottom_rgb.shape[1])
 +
 +        def _pad_width(rgb, width):
 +            if rgb.shape[1] == width:
@@ -50,14 +34,14 @@ index 982e6ec..49897c0 100644
 +            pad_w = width - rgb.shape[1]
 +            return np.pad(rgb, ((0, 0), (0, pad_w), (0, 0)), mode="constant")
 +
-+        top_rgb = _pad_width(top_rgb, target_w)
++        head_rgb = _pad_width(head_rgb, target_w)
 +        bottom_rgb = _pad_width(bottom_rgb, target_w)
-+        return np.concatenate([top_rgb, bottom_rgb], axis=0)
++        return np.concatenate([head_rgb, bottom_rgb], axis=0)
 +
      # =========================================================== Init Task Env ===========================================================
      def _init_task_env_(self, table_xy_bias=[0, 0], table_height_bias=0, **kwags):
          """
-@@ -68,7 +116,6 @@ class Base_Task(gym.Env):
+@@ -68,7 +92,6 @@ class Base_Task(gym.Env):
          self.save_data = kwags.get("save_data", False)
          self.dual_arm = kwags.get("dual_arm", True)
          self.eval_mode = kwags.get("eval_mode", False)
@@ -65,16 +49,7 @@ index 982e6ec..49897c0 100644
          self.need_topp = True  # TODO
  
          # Random
-@@ -214,7 +261,7 @@ class Base_Task(gym.Env):
-         sapien.render.set_camera_shader_dir("rt")
-         sapien.render.set_ray_tracing_samples_per_pixel(32)
-         sapien.render.set_ray_tracing_path_depth(8)
--        sapien.render.set_ray_tracing_denoiser("oidn")
-+        sapien.render.set_ray_tracing_denoiser("none")  # OIDN requires CUDA; disabled on ROCm
- 
-         # declare sapien scene
-         scene_config = sapien.SceneConfig()
-@@ -483,7 +530,6 @@ class Base_Task(gym.Env):
+@@ -483,7 +506,6 @@ class Base_Task(gym.Env):
              pkl_dic["endpose"]["right_gripper"] = norm_gripper_val[1]
          # qpos
          if self.data_type.get("qpos", False):
@@ -82,7 +57,7 @@ index 982e6ec..49897c0 100644
              left_jointstate = self.robot.get_left_arm_jointState()
              right_jointstate = self.robot.get_right_arm_jointState()
  
-@@ -1482,10 +1528,11 @@ class Base_Task(gym.Env):
+@@ -1482,10 +1504,11 @@ class Base_Task(gym.Env):
  
          eval_video_freq = 1  # fixed
          if (self.eval_video_path is not None and self.take_action_cnt % eval_video_freq == 0):
@@ -96,7 +71,7 @@ index 982e6ec..49897c0 100644
  
          self._update_render()
          if self.render_freq:
-@@ -1658,7 +1705,8 @@ class Base_Task(gym.Env):
+@@ -1658,7 +1681,8 @@ class Base_Task(gym.Env):
                  self.eval_success = True
                  self.get_obs() # update obs
                  if (self.eval_video_path is not None):
@@ -123,17 +98,20 @@ index 46d960d..e41bc57 100644
  import transforms3d as t3d
  import cv2
 diff --git a/envs/robot/planner.py b/envs/robot/planner.py
-index 21ae432..a8acab1 100644
+index 21ae432..67f480e 100644
 --- a/envs/robot/planner.py
 +++ b/envs/robot/planner.py
-@@ -274,6 +274,7 @@ except Exception as e:
+@@ -270,6 +270,10 @@ try:
+             result_q = t3d.quaternions.mat2quat(wRb.T @ wRt)
+             return result_p, result_q
+     
++except ModuleNotFoundError as exc:
++    if (exc.name or "").split(".", 1)[0] != "curobo":
++        raise
++    CuroboPlanner = None
+ except Exception as e:
      print('[planner.py]: Something wrong happened when importing CuroboPlanner! Please check if Curobo is installed correctly. If the problem still exists, you can install Curobo from https://github.com/NVlabs/curobo manually.')
      print('Exception traceback:')
-     traceback.print_exc()
-+    CuroboPlanner = None  # curobo unavailable (AMD/ROCm): stub so import succeeds
- 
- 
- # ********************** MplibPlanner **********************
 diff --git a/envs/robot/robot.py b/envs/robot/robot.py
 index 9dfc08f..d7e0b17 100644
 --- a/envs/robot/robot.py
