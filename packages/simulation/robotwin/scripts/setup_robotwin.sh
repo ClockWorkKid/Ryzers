@@ -8,7 +8,7 @@ set -euo pipefail
 RT_COMMIT="${RT_COMMIT:-bf44be51cf5717a5595ce59447f2cf5263d2aa95}"
 RAW="https://raw.githubusercontent.com/RoboTwin-Platform/RoboTwin/${RT_COMMIT}"
 REPO_RT="${ROBOTWIN_ROOT:-/opt/RoboTwin}"
-ASSETS="${ROBOTWIN_ASSETS_DIR:-/models/robotwin_assets}"
+ASSETS="${ROBOTWIN_ASSETS_DIR:-/sim_models/robotwin_assets}"
 mkdir -p "$ASSETS/assets" "$ASSETS/task_config"
 
 if [ ! -f "$ASSETS/.ready" ]; then
