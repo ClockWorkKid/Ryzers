@@ -26,14 +26,20 @@ CKPT=$REL/libero_uncond_2cam224.pt
 [ -f "$CKPT" ] || { echo "missing $CKPT -> run scripts/download_checkpoints.sh libero" >&2; exit 1; }
 
 cd /tmp
+mkdir -p "$OUT/logs"
+FAILED=()
 for t in $(seq 0 $((NUM_TASKS-1))); do
   echo "########## $SUITE task $t ##########"
+  LOG="$OUT/logs/${SUITE}_task${t}.log"
   python /repos/fastwam/experiments/libero/eval_libero_single.py \
     ckpt=$CKPT gpu_id=0 mixed_precision=bf16 \
     EVALUATION.task_suite_name=$SUITE EVALUATION.task_id=$t EVALUATION.num_trials=$NUM_TRIALS \
     EVALUATION.visualize_future_video=$VISUALIZE_FUTURE EVALUATION.output_dir=$OUT \
     EVALUATION.dataset_stats_path=$REL/libero_uncond_2cam224_dataset_stats.json \
-    2>&1 | grep -E "Task [0-9]+ completed|Saved rollout|Traceback|Error executing|success="
+    > "$LOG" 2>&1
+  rc=$?
+  grep -E "Task [0-9]+ completed|Saved rollout|success=" "$LOG"
+  if [ "$rc" -ne 0 ]; then FAILED+=("$t"); tail -n 20 "$LOG" >&2; fi
 done
 
 python3 - "$OUT/$SUITE" <<'PY'
@@ -57,3 +63,7 @@ json.dump({"suite": os.path.basename(d), "overall_successes": tot_s, "overall_ep
           open(os.path.join(d, "success_summary.json"), "w"), indent=2)
 print("wrote", os.path.join(d, "success_summary.json"))
 PY
+if [ "${#FAILED[@]}" -gt 0 ]; then
+  echo "FAIL: LIBERO closed-loop failed for $SUITE task(s): ${FAILED[*]} (logs under $OUT/logs)" >&2
+  exit 1
+fi

@@ -25,7 +25,12 @@ CKPT=$REL/robotwin_uncond_3cam_384.pt
 # Fetch RoboTwin assets + wire into /opt/RoboTwin (idempotent).
 bash /ryzers/scripts/setup_robotwin.sh
 
+# FastWAM writes results/videos under <repo>/evaluate_results; keep them on the /outputs volume.
+OUT="${OUT_DIR:-/outputs}/closedloop_robotwin"
+mkdir -p "$OUT" && rm -rf /repos/fastwam/evaluate_results && ln -s "$OUT" /repos/fastwam/evaluate_results
+
 cd /repos/fastwam
+FAILED=()
 for TASK in $TASKS; do
   echo "########## RoboTwin $TASK ($NUM_EPISODES episodes) ##########"
   python -u experiments/robotwin/eval_robotwin_single.py \
@@ -34,7 +39,11 @@ for TASK in $TASKS; do
     EVALUATION.task_name=$TASK EVALUATION.task_config=$TASK_CONFIG \
     EVALUATION.eval_num_episodes=$NUM_EPISODES \
     EVALUATION.dataset_stats_path=$REL/robotwin_uncond_3cam_384_dataset_stats.json \
-    2>&1 | grep -viE 'svulkan2|Failed to initialize denoiser|cudaErrorInsufficientDriver' \
-    || echo "TASK $TASK returned nonzero"
+    2>&1 | grep -viE 'svulkan2|cudaErrorInsufficientDriver'
+  [ "${PIPESTATUS[0]}" -eq 0 ] || FAILED+=("$TASK")
 done
-echo "PASS: RoboTwin closed-loop suite complete"
+if [ "${#FAILED[@]}" -gt 0 ]; then
+  echo "FAIL: RoboTwin closed-loop failed for: ${FAILED[*]} (logs under $OUT)" >&2
+  exit 1
+fi
+echo "PASS: RoboTwin closed-loop suite complete (results under $OUT)"
