@@ -24,17 +24,17 @@ RUN apt-get update && \
       ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
-# SAPIEN deps under a torch/numpy constraint to keep base ROCm torch. setuptools<81 (sapien/mplib
-# use removed pkg_resources); numpy 1.26.4 pinned last to protect the base torch stack.
-RUN pip freeze | grep -iE "^(torch|torchvision|torchcodec)==" > /opt/torch-constraints.txt && \
+# SAPIEN deps under a torch constraint to keep base ROCm torch. setuptools<81 (sapien/mplib
+# use removed pkg_resources). numpy 1.26.4 (sapien/mplib) is resolved together with the rest
+# so pip picks numpy-1.x compatible releases (e.g. sapien's opencv-python).
+RUN { pip freeze | grep -iE "^(torch|torchvision|torchcodec)=="; echo "numpy==1.26.4"; } > /opt/torch-constraints.txt && \
     PIP_CONSTRAINT=/opt/torch-constraints.txt pip install --no-cache-dir \
       "setuptools<81" \
       "sapien==3.0.0b1" "transforms3d==0.4.2" "trimesh==4.4.3" "gymnasium==0.29.1" \
-      toppra "scipy<1.15" "pyglet<2" termcolor moviepy av matplotlib pydantic zarr h5py lxml \
-      "imageio>=2.34" "imageio-ffmpeg>=0.5" "pillow>=10" opencv-python-headless \
+      toppra "scipy<1.15" "pyglet<2" termcolor av matplotlib pydantic h5py lxml \
+      "imageio>=2.34" "imageio-ffmpeg>=0.5" "pillow>=10" \
       huggingface_hub && \
-    PIP_CONSTRAINT=/opt/torch-constraints.txt pip install --no-cache-dir --no-deps "mplib==0.2.1" && \
-    pip install --no-cache-dir "numpy==1.26.4"
+    PIP_CONSTRAINT=/opt/torch-constraints.txt pip install --no-cache-dir --no-deps "mplib==0.2.1"
 
 # PyTorch3D (ROCm/HIP) built from source @ pin for gfx1151 (point-cloud ops FPS/kNN). torch's
 # BuildExtension auto-hipifies the sources; --no-build-isolation so setup.py sees base ROCm torch.
