@@ -1,11 +1,13 @@
 ### FastWAM
 
-This package runs [FastWAM](https://github.com/yuantianyuan01/FastWAM) on AMD Ryzen AI Max+ 395 (Strix Halo, gfx1151) under ROCm 7.14. FastWAM is a Wan2.2-TI2V-5B world-action model (T5 text encoder, Wan VAE, and a joint video/action DiT) that can plan actions with the video head skipped for speed, or imagine future frames alongside the action plan. It chains on top of a simulator base for closed-loop and interactive runs, or runs standalone on the plain base for the non-sim demos.
+This package runs [FastWAM](https://github.com/yuantianyuan01/FastWAM), a Wan2.2-TI2V-5B world-action model (T5 text encoder, Wan VAE, and a joint video/action DiT) that can plan actions with the video head skipped for speed, or imagine future frames alongside the action plan. It chains on top of a simulator base for closed-loop and interactive runs, or runs standalone on the plain base for the non-sim demos.
 
 ### Build
 
+Set `HF_TOKEN` on the host before running for faster Hugging Face downloads.
+
 ```sh
-ryzers build fastwam --name fastwam                       # just model layer: non-sim demos (open-loop / videogen)
+ryzers build fastwam --name fastwam                       # just model layer: non-sim demos (videogen)
 ryzers run --name fastwam                                 # test.py: ROCm torch + GPU + deps check
 ```
 
@@ -15,17 +17,18 @@ ryzers build libero   fastwam --name fastwam-libero     # chain the model on the
 ryzers build robotwin fastwam --name fastwam-robotwin   # chain the model on the RoboTwin base
 ```
 
-Artifacts are written to `workspace/*/outputs`. Set `HF_TOKEN` for faster or gated downloads.
-The ~12 GB weights are fetched on the first model run.
+### Weights
+
+Each FastWAM checkpoint is ~12 GB. Fetch the one you need (`libero`, `robotwin`, or `all`, the default) with any of the FastWAM images; they share `workspace/fastwam/models`. The Wan2.2 base (~12 GB) is downloaded from ModelScope on the first model run. Outputs are written to `workspace/fastwam/outputs`.
 
 ```sh
-ryzers run --name fastwam /ryzers/scripts/download_checkpoints.sh    # LIBERO + RoboTwin ckpts
+ryzers run --name fastwam-libero   "/ryzers/scripts/download_checkpoints.sh libero"
+ryzers run --name fastwam-robotwin "/ryzers/scripts/download_checkpoints.sh robotwin"
 ```
 
 ### Interactive and closed-loop LIBERO
 
-Drive the robot live in a browser, or run a batch rollout for a success rate. The interactive
-server streams the MuJoCo view over HTTP and prints its `http://localhost:PORT` URL.
+Drive the robot live in a browser, or run a batch rollout for a success rate. The interactive server streams the MuJoCo view over HTTP and prints its `http://localhost:PORT` URL.
 
 ```sh
 ryzers run --name fastwam-libero /ryzers/demos/demo_interactive_libero.sh      # live browser control
@@ -35,14 +38,13 @@ ryzers run --name fastwam-libero /ryzers/demos/demo_closedloop_libero.sh       #
 Closed-loop libero task, rendered headless via EGL.
 
 <p align="center">
-  <img src="assets/closedloop_libero_alphabet_soup.gif" width="420">
+  <img src="../../simulation/libero/assets/libero_fastwam.gif" width="420">
   <br>
   <img src="assets/closedloop_libero_cream_cheese.gif" width="420">
   <br><em>Closed-loop LIBERO-object rollouts.</em>
 </p>
 
-With `VISUALIZE_FUTURE=true` the slow path also renders the imagined future stacked over the
-real rollout (imagined top, ground truth bottom).
+With `VISUALIZE_FUTURE=true` the slow path also renders the imagined future stacked over the real rollout (imagined top, ground truth bottom).
 
 <p align="center">
   <img src="assets/closedloop_slow_gt_vs_imagined.gif" width="420">
@@ -51,7 +53,7 @@ real rollout (imagined top, ground truth bottom).
 
 ### Interactive and closed-loop RoboTwin 2.0
 
-RoboTwin 2.0 runs under the SAPIEN Vulkan renderer.
+RoboTwin 2.0 runs under the SAPIEN Vulkan renderer. Its assets are fetched on the first run.
 
 ```sh
 ryzers run --name fastwam-robotwin /ryzers/demos/demo_interactive_robotwin.sh  # live browser control
@@ -68,16 +70,17 @@ TASKS="click_bell lift_pot" NUM_EPISODES=10 \
 
 ### Video imagination
 
-The joint path imagines the future video and actions together (ground truth left, imagined
-right).
+The joint path imagines the future video and actions together (ground truth left, imagined right). It replays episodes from the preprocessed dataset (LIBERO ~5 GB; `DATASET=robotwin` works the same way with the ~80 GB RoboTwin dataset).
 
 ```sh
+ryzers run --name fastwam "/ryzers/scripts/download_checkpoints.sh libero"
+ryzers run --name fastwam "/ryzers/scripts/download_datasets.sh libero"
 DATASET=libero ryzers run --name fastwam /ryzers/demos/demo_videogen.sh
 ```
 
 <p align="center">
-  <img src="assets/imagination_robotwin.gif" width="480">
-  <br><em>RoboTwin: ground truth (left) vs imagined future (right).</em>
+  <img src="assets/imagination_libero.gif" width="480">
+  <br><em>LIBERO: ground truth (left) vs imagined future (right).</em>
 </p>
 
 

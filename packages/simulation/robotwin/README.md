@@ -1,11 +1,6 @@
 ### RoboTwin 2.0
 
-This package provides the RoboTwin 2.0 simulation base (SAPIEN offscreen Vulkan ray-tracing
-renderer plus mplib motion planning) as a Ryzer on AMD Ryzen AI Max+ 395 (Strix Halo,
-gfx1151) under ROCm 7.14. RoboTwin 2.0 is a dual-arm manipulation benchmark. The base exposes
-a model-agnostic `sim_robotwin.Policy` seam, selected at runtime via `POLICY_FACTORY` (default
-the built-in `RandomPolicy`), that WAM and VLA packages chain on for closed-loop and
-interactive rollouts.
+This package provides the RoboTwin 2.0 simulation base (SAPIEN offscreen Vulkan ray-tracing renderer plus mplib motion planning) as a Ryzer. RoboTwin 2.0 is a dual-arm manipulation benchmark. The base exposes a model-agnostic `sim_robotwin.Policy` seam, selected at runtime via `POLICY_FACTORY` (default the built-in `RandomPolicy`), that WAM and VLA packages chain on for closed-loop and interactive rollouts.
 
 ### Build
 

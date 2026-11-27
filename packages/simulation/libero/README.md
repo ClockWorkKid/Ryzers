@@ -1,8 +1,6 @@
 ### LIBERO
 
-This package provides the LIBERO simulation base (MuJoCo/EGL) as a Ryzer on AMD Ryzen AI
-Max+ 395 (Strix Halo, gfx1151) under ROCm 7.14. It exposes a model-agnostic `Policy` seam
-that WAM and VLA packages chain on for closed-loop and interactive rollouts.
+This package provides the LIBERO simulation base (MuJoCo/EGL) as a Ryzer. It exposes a model-agnostic `Policy` seam that WAM and VLA packages chain on for closed-loop and interactive rollouts.
 
 ### Build
 
