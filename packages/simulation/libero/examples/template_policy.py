@@ -9,7 +9,8 @@ Steps
 -----
 1. Chain on the sim base in your model's Dockerfile, installing your model UNDER the
    base's torch+numpy pins (needs numpy 1.26.4) so the LIBERO/robosuite/MuJoCo stack is
-   not broken (FastWAM's scripts/strip_cuda_torch.py is a working reference):
+   not broken (the pin-strip + PIP_CONSTRAINT step in FastWAM's Dockerfile is a working
+   reference):
 
        ARG BASE_IMAGE
        FROM ${BASE_IMAGE}

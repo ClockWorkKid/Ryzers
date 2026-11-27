@@ -27,9 +27,9 @@ RUN git clone https://github.com/yuantianyuan01/FastWAM /repos/fastwam && \
 COPY scripts/patches/fastwam_kv_cache.patch /tmp/fastwam_kv_cache.patch
 RUN git -C /repos/fastwam apply --verbose /tmp/fastwam_kv_cache.patch
 
-# Pin base torch+numpy so the install never replaces them (composes on numpy 2.x or 1.26.4).
-COPY scripts/strip_cuda_torch.py /ryzers/scripts/strip_cuda_torch.py
-RUN python /ryzers/scripts/strip_cuda_torch.py /repos/fastwam/pyproject.toml && \
+# Drop FastWAM's CUDA torch/numpy pins and constrain to the base's torch+numpy so the
+# install never replaces them (composes on numpy 2.x or 1.26.4).
+RUN sed -i -E '/^\s*"(torch|torchvision|torchcodec|numpy)\s*[=<>!~]/d' /repos/fastwam/pyproject.toml && \
     pip freeze | grep -iE "^(torch|torchvision|torchcodec|numpy)==" > /opt/fastwam-constraints.txt && \
     PIP_CONSTRAINT=/opt/fastwam-constraints.txt pip install --no-cache-dir -e /repos/fastwam && \
     PIP_CONSTRAINT=/opt/fastwam-constraints.txt pip install --no-cache-dir \
